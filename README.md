@@ -80,7 +80,7 @@ Here is the checklist of components and kernels needed for a complete LLM infere
 - [x] Tokenization
 - [x] Embeddings computation
 - [x] CUDA kernel engineering - embeddings
-- [ ] RMSNorm and parallel reduction in CUDA
+- [x] RMSNorm and parallel reduction in CUDA
 - [ ] RoPE (Rotary Positional Embeddings)
 - [ ] Residual connections
 - [ ] cuBLAS GemmEx matrix multiplications
