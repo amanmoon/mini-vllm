@@ -9,18 +9,49 @@ set(CMAKE_CUDA_ARCHITECTURES 120)
 
 find_package(CUDAToolkit REQUIRED)
 
-add_executable(transformer
-    src/main.cu
+# -----------------------------------------------------------------------------
+# Library
+# -----------------------------------------------------------------------------
+
+add_library(transformer_lib
     src/load_weights.cpp
     src/tensor.cpp
     src/utils.cpp
     src/kernels.cu
 )
 
-set_target_properties(transformer PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(transformer_lib PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+)
 
-target_include_directories(transformer PRIVATE
+target_include_directories(transformer_lib PUBLIC
     include
 )
 
-target_link_libraries(transformer PRIVATE CUDA::cudart)
+target_link_libraries(transformer_lib PUBLIC
+    CUDA::cudart
+)
+
+# -----------------------------------------------------------------------------
+# Main executable
+# -----------------------------------------------------------------------------
+
+add_executable(transformer
+    src/main.cu
+)
+
+target_link_libraries(transformer PRIVATE
+    transformer_lib
+)
+
+# -----------------------------------------------------------------------------
+# Tests
+# -----------------------------------------------------------------------------
+
+add_executable(test_rms_norm
+    tests/test_rms_norm.cu
+)
+
+target_link_libraries(test_rms_norm PRIVATE
+    transformer_lib
+)
