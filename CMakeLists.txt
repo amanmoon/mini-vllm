@@ -14,10 +14,12 @@ find_package(CUDAToolkit REQUIRED)
 # -----------------------------------------------------------------------------
 
 add_library(transformer_lib
+    src/kernels_api.cu
     src/load_weights.cpp
-    src/tensor.cpp
+    src/dtype.cpp
     src/utils.cpp
     src/kernels.cu
+    src/kernels_api.cu
 )
 
 set_target_properties(transformer_lib PROPERTIES
@@ -37,7 +39,7 @@ target_link_libraries(transformer_lib PUBLIC
 # -----------------------------------------------------------------------------
 
 add_executable(transformer
-    src/main.cu
+    src/main.cpp
 )
 
 target_link_libraries(transformer PRIVATE

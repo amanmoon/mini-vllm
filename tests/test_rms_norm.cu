@@ -7,9 +7,9 @@
 #include <string>
 #include <vector>
 
-#include <kernels.cuh>
-
-constexpr float EPS = 1e-5f;
+#include "kernels_api.hpp"
+#include "dtype.hpp"
+#include "config.hpp"
 
 struct TestCase
 {
@@ -21,6 +21,7 @@ struct TestCase
 void runTest(const TestCase &test)
 {
     const int vectorDim = test.input.size();
+    const int numTokens = 1;
 
     float *dInput = nullptr;
     float *dOutput = nullptr;
@@ -42,11 +43,10 @@ void runTest(const TestCase &test)
         vectorDim * sizeof(float),
         cudaMemcpyHostToDevice);
 
-    MiniVLLM::rootMeanSquareNorm<float>
-        <<<1, 1024>>>(vectorDim,
-                      dOutput,
-                      dInput,
-                      dNormWeights);
+    MiniVLLM::launchRMSNorm(MiniVLLM::DType::Float32, numTokens, vectorDim, 
+                            dOutput,
+                            dInput,
+                            dNormWeights);
 
     cudaDeviceSynchronize();
 
@@ -63,7 +63,7 @@ void runTest(const TestCase &test)
     for (float x : test.input)
         sum += x * x;
 
-    float rms = std::sqrt(sum / vectorDim + EPS);
+    float rms = std::sqrt(sum / vectorDim + MiniVLLM::RMS_NORM_EPS);
 
     bool passed = true;
     int failedIndex = -1;
@@ -74,7 +74,7 @@ void runTest(const TestCase &test)
         float expected =
             (test.input[i] / rms) * test.normWeights[i];
 
-        if (std::fabs(expected - gpuOutput[i]) > EPS)
+        if (std::fabs(expected - gpuOutput[i]) > MiniVLLM::RMS_NORM_EPS)
         {
             passed = false;
             failedIndex = i;
@@ -116,53 +116,34 @@ void runTest(const TestCase &test)
 int main()
 {
     std::vector<TestCase> tests =
-    {
         {
-            "Sequential",
-            {1,2,3,4,5,6,7,8,9,10},
-            {1,1,1,1,1,1,1,1,1,1}
-        },
+            {"Sequential",
+             {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
 
-        {
-            "Mixed Signs",
-            {
-                1.25f,-2.80f,3.14f,-4.75f,5.50f,
-                -6.33f,7.91f,-8.62f,9.27f,-10.48f
-            },
-            {
-                0.95f,1.10f,0.87f,1.23f,0.76f,
-                1.05f,1.18f,0.91f,1.30f,0.84f
-            }
-        },
+            {"Mixed Signs",
+             {1.25f, -2.80f, 3.14f, -4.75f, 5.50f,
+              -6.33f, 7.91f, -8.62f, 9.27f, -10.48f},
+             {0.95f, 1.10f, 0.87f, 1.23f, 0.76f,
+              1.05f, 1.18f, 0.91f, 1.30f, 0.84f}},
 
-        {
-            "All Ones",
-            {1,1,1,1,1,1,1,1,1,1},
-            {1,1,1,1,1,1,1,1,1,1}
-        },
+            {"All Ones",
+             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
 
-        {
-            "Negative Inputs",
-            {-1,-2,-3,-4,-5,-6,-7,-8,-9,-10},
-            {1,1,1,1,1,1,1,1,1,1}
-        },
+            {"Negative Inputs",
+             {-1, -2, -3, -4, -5, -6, -7, -8, -9, -10},
+             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
 
-        {
-            "Random Weights",
-            {2,4,6,8,10,12,14,16,18,20},
-            {0.3f,0.7f,1.1f,1.5f,0.2f,
-             0.9f,1.8f,0.6f,1.3f,2.0f}
-        },
+            {"Random Weights",
+             {2, 4, 6, 8, 10, 12, 14, 16, 18, 20},
+             {0.3f, 0.7f, 1.1f, 1.5f, 0.2f,
+              0.9f, 1.8f, 0.6f, 1.3f, 2.0f}},
 
-        {
-            "Tiny Values",
-            {
-                0.001f,-0.002f,0.003f,-0.004f,0.005f,
-                -0.006f,0.007f,-0.008f,0.009f,-0.010f
-            },
-            {1,1,1,1,1,1,1,1,1,1}
-        }
-    };
+            {"Tiny Values",
+             {0.001f, -0.002f, 0.003f, -0.004f, 0.005f,
+              -0.006f, 0.007f, -0.008f, 0.009f, -0.010f},
+             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1}}};
 
     // Large random test (5000 dimensions)
     {
@@ -187,9 +168,6 @@ int main()
 
         tests.push_back(std::move(randomTest));
     }
-
-
-    int passed = 0;
 
     for (const auto &test : tests)
     {

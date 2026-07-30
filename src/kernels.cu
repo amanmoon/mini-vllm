@@ -1,10 +1,9 @@
+#include "config.hpp"
 
 #include <cuda_bf16.h>
 
 namespace MiniVLLM
 {
-    const int THREADS_PER_BLOCK = 1024;
-    const float RMS_NORM_EPS = 1e-05;
 
     /**
      * @brief Generate embedding vector for each token in the input sequence.
@@ -42,6 +41,7 @@ namespace MiniVLLM
     }
 
     template __global__ void embeddingGatherKernel<__nv_bfloat16>(size_t tokenEmbeddingDim, int *inputTokenIDArray, __nv_bfloat16 *embeddedTokenArray, __nv_bfloat16 *embeddingMatrix);
+    template __global__ void embeddingGatherKernel<float>(size_t tokenEmbeddingDim, int *inputTokenIDArray, float *embeddedTokenArray, float *embeddingMatrix);
 
     /**
      * @brief Computes the Root Mean Square (RMS) of a vector.
@@ -51,6 +51,7 @@ namespace MiniVLLM
      *     sqrt((1 / vectorDim) * Σ(x_i²) + epsilon)
      *
      * @tparam T Input data type (e.g. float, __half, __nv_bfloat16).
+     * @tparam AccT is the Data type of accumulator used for increased numerical stability.
      *
      * @param vectorDim Length of the input vector.
      * @param inputVector Pointer to the input vectors stored in contiguous memory.
@@ -65,7 +66,7 @@ namespace MiniVLLM
      * - The returned RMS value is identical for every thread in the block.
      */
 
-    template <typename T>
+    template <typename T, typename AccT>
     __device__ T rootMeanSquare(int vectorDim, T *inputVector, float epsilon)
     {
         __shared__ float sharedSum[THREADS_PER_BLOCK];
@@ -78,7 +79,7 @@ namespace MiniVLLM
             if (internalBlockDim < vectorDim)
             {
                 int workIdx = blockIdx.x * vectorDim + internalBlockDim;
-                sharedSum[threadIdx.x] += (float)inputVector[workIdx] * (float)inputVector[workIdx];
+                sharedSum[threadIdx.x] += (AccT)inputVector[workIdx] * (AccT)inputVector[workIdx];
             }
         }
         __syncthreads();
@@ -113,6 +114,7 @@ namespace MiniVLLM
      *     RMS(input) = sqrt((1 / vectorDim) * Σ(input_i²) + RMS_NORM_EPS)
      *
      * @tparam T Data type of the input, output, and normalization weights.
+     * @tparam AccT is the Data type of accumulator in the rootMeanSquare function used for increased numerical stability.
      *
      * @param vectorDim Dimension of each token vector.
      * @param outputVector Pointer to the output vectors.
@@ -121,13 +123,13 @@ namespace MiniVLLM
      *
      * @note
      * - Grid layout: one CUDA block per token vector.
-     * - Computation of the RMS internally uses float accumulation for improved
+     * - Computation of the RMS internally uses AccT accumulation for improved
      *   numerical stability.
      */
-    template <typename T>
+    template <typename T, typename AccT>
     __global__ void rootMeanSquareNorm(int vectorDim, T *outputVector, T *inputVector, T *normWeights)
     {
-        T rmsValue = rootMeanSquare<T>(vectorDim, inputVector, RMS_NORM_EPS);
+        T rmsValue = rootMeanSquare<T, AccT>(vectorDim, inputVector, RMS_NORM_EPS);
 
         int stride = (vectorDim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
         for (int i = 0; i < stride; ++i)
@@ -141,6 +143,6 @@ namespace MiniVLLM
         }
     }
 
-    template __global__ void rootMeanSquareNorm<__nv_bfloat16>(int vectorDim, __nv_bfloat16 *outputVector, __nv_bfloat16 *inputVector, __nv_bfloat16 *normWeights);
-    template __global__ void rootMeanSquareNorm<float>(int vectorDim, float *outputVector, float *inputVector, float *normWeights);
+    template __global__ void rootMeanSquareNorm<__nv_bfloat16, float>(int vectorDim, __nv_bfloat16 *outputVector, __nv_bfloat16 *inputVector, __nv_bfloat16 *normWeights);
+    template __global__ void rootMeanSquareNorm<float, double>(int vectorDim, float *outputVector, float *inputVector, float *normWeights);
 }

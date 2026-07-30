@@ -1,9 +1,11 @@
-#include "load_weights.hpp"
 #include "utils.hpp"
-#include "kernels.cuh"
+#include "load_weights.hpp"
+#include "kernels_api.hpp"   // plain-C++ wrappers — no CUDA syntax needed here
 
 #include <cuda_runtime.h>
-#include <cuda_bf16.h>
+#include <cstdint>
+#include <iostream>
+#include <vector>
 
 int main()
 {
@@ -25,7 +27,7 @@ int main()
     // }
 
     std::vector<int> tokens = MiniVLLM::tokenize("Hello, how are you?");
-    int numTokens = tokens.size();
+    int numTokens = static_cast<int>(tokens.size());
 
     // for (int token : tokens)
     // {
@@ -40,35 +42,47 @@ int main()
         tokens.size() * sizeof(int),
         cudaMemcpyHostToDevice);
 
-    __nv_bfloat16 *d_output = nullptr;
+    static constexpr int EMBED_DIM = 2048;
+    static constexpr std::size_t BF16_SIZE = 2; 
 
-    cudaMalloc(
-        &d_output,
-        numTokens * 2048 * sizeof(__nv_bfloat16));
+    void *d_embedded = nullptr;
+    cudaMalloc(&d_embedded, numTokens * EMBED_DIM * BF16_SIZE);
 
-    __nv_bfloat16 *embed_weight_ptr = reinterpret_cast<__nv_bfloat16 *>(
-        static_cast<uint8_t *>(weights.data_ptr) + weights.tensors["model.embed_tokens.weight"].dataOffset);
-    MiniVLLM::embeddingGatherKernel<__nv_bfloat16><<<numTokens, 1024>>>(2048, d_tokens, d_output, embed_weight_ptr);
+    void *embed_weight_ptr =
+        static_cast<uint8_t *>(weights.data_ptr) +
+        weights.tensors["model.embed_tokens.weight"].dataOffset;
+
+    MiniVLLM::launchEmbeddingGather(
+        MiniVLLM::DType::BFloat16,
+        numTokens,
+        EMBED_DIM,
+        d_tokens,
+        d_embedded,
+        embed_weight_ptr);
 
     cudaDeviceSynchronize();
 
-    std::vector<__nv_bfloat16> h_output(numTokens * 2048);
-
+    std::vector<uint16_t> h_output(numTokens * EMBED_DIM);
     cudaMemcpy(
         h_output.data(),
-        d_output,
-        h_output.size() * sizeof(__nv_bfloat16),
+        d_embedded,
+        h_output.size() * BF16_SIZE,
         cudaMemcpyDeviceToHost);
 
     for (size_t i = 0; i < 10; ++i)
     {
-        std::cout << __bfloat162float(h_output[i]) << ' ';
+        uint32_t bits = static_cast<uint32_t>(h_output[i]) << 16;
+        float val;
+        __builtin_memcpy(&val, &bits, sizeof(float));
+        std::cout << val << ' ';
 
-        // Print one embedding per line
-        if ((i + 1) % 2048 == 0)
+        if ((i + 1) % EMBED_DIM == 0)
             std::cout << '\n';
     }
 
+    cudaFree(d_tokens);
+    cudaFree(d_embedded);
     cudaDeviceReset();
     return 0;
 }
+

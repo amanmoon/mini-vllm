@@ -1,5 +1,10 @@
-#include <iostream>
-#include <numeric>
+// rapidjson/example/simpledom/simpledom.cpp`
+#include "rapidjson/document.h"
+
+// internal headers
+#include "utils.hpp"
+#include "dtype.hpp"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -10,16 +15,6 @@
 
 // CUDA
 #include <cuda_runtime.h>
-
-// rapidjson/example/simpledom/simpledom.cpp`
-#include "rapidjson/document.h"
-#include "rapidjson/writer.h"
-#include "rapidjson/stringbuffer.h"
-
-// internal headers
-#include "utils.hpp"
-#include "tensor.hpp"
-#include "load_weights.hpp"
 
 namespace MiniVLLM
 {
@@ -71,7 +66,7 @@ namespace MiniVLLM
             if (key != "__metadata__")
             {
                 Tensor tensor;
-                tensor.dataType = stringToDataType(value["dtype"].GetString());
+                tensor.dataType = stringToDType(value["dtype"].GetString());
                 for (auto &dim : value["shape"].GetArray())
                 {
                     tensor.shape.push_back(dim.GetUint64());
@@ -81,7 +76,5 @@ namespace MiniVLLM
                 weights.tensors[key.GetString()] = tensor;
             }
         }
-
-        // cudaFree(d_weights);
     }
 }
