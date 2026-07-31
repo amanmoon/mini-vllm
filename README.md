@@ -73,6 +73,18 @@ You may need to adjust environment-specific paths, such as CUDA or GCC in `c_cpp
 
 ## Implementation Progress
 
+## Model configuration
+
+Model-dependent values live in `model_specifics/`. A profile exposes a
+`const MiniVLLM::ModelConfig &getConfig()` function (see `llama.cu`). Pass that
+profile to every `launch*` function: the launchers select the dtype and obtain
+the relevant dimensions and numerical settings from it. Generic CUDA kernels
+remain model-agnostic.
+
+To add a model, add `<model>.hpp` and `<model>.cu` next to `llama.cu`, define
+its `ModelConfig`, add the `.cu` file to `transformer_lib` in CMake, and select
+the profile where inference is initialized.
+
 Here is the checklist of components and kernels needed for a complete LLM inference pipeline:
 
 - [x] Safetensors model loading
@@ -81,7 +93,7 @@ Here is the checklist of components and kernels needed for a complete LLM infere
 - [x] Embeddings computation
 - [x] CUDA kernel engineering - embeddings
 - [x] RMSNorm and parallel reduction in CUDA
-- [ ] RoPE (Rotary Positional Embeddings)
+- [x] RoPE (Rotary Positional Embeddings)
 - [ ] Residual connections
 - [ ] cuBLAS GemmEx matrix multiplications
 - [ ] Attention mechanism

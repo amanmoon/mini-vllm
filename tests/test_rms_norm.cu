@@ -1,178 +1,219 @@
+#include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cmath>
-#include <iomanip>
+#include <exception>
 #include <iostream>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
-#include "kernels_api.hpp"
 #include "dtype.hpp"
-#include "config.hpp"
+#include "kernels_api.hpp"
 
-struct TestCase
+namespace
 {
-    std::string name;
-    std::vector<float> input;
-    std::vector<float> normWeights;
-};
+    constexpr float kRmsNormEpsilon = 1.0e-5f;
 
-void runTest(const TestCase &test)
-{
-    const int vectorDim = test.input.size();
-    const int numTokens = 1;
-
-    float *dInput = nullptr;
-    float *dOutput = nullptr;
-    float *dNormWeights = nullptr;
-
-    cudaMalloc(&dInput, vectorDim * sizeof(float));
-    cudaMalloc(&dOutput, vectorDim * sizeof(float));
-    cudaMalloc(&dNormWeights, vectorDim * sizeof(float));
-
-    cudaMemcpy(
-        dInput,
-        test.input.data(),
-        vectorDim * sizeof(float),
-        cudaMemcpyHostToDevice);
-
-    cudaMemcpy(
-        dNormWeights,
-        test.normWeights.data(),
-        vectorDim * sizeof(float),
-        cudaMemcpyHostToDevice);
-
-    MiniVLLM::launchRMSNorm(MiniVLLM::DType::Float32, numTokens, vectorDim, 
-                            dOutput,
-                            dInput,
-                            dNormWeights);
-
-    cudaDeviceSynchronize();
-
-    std::vector<float> gpuOutput(vectorDim);
-
-    cudaMemcpy(
-        gpuOutput.data(),
-        dOutput,
-        vectorDim * sizeof(float),
-        cudaMemcpyDeviceToHost);
-
-    // CPU reference
-    float sum = 0.0f;
-    for (float x : test.input)
-        sum += x * x;
-
-    float rms = std::sqrt(sum / vectorDim + MiniVLLM::RMS_NORM_EPS);
-
-    bool passed = true;
-    int failedIndex = -1;
-    float expectedValue = 0.0f;
-
-    for (int i = 0; i < vectorDim; i++)
+    void checkCuda(cudaError_t status, const char *operation)
     {
-        float expected =
-            (test.input[i] / rms) * test.normWeights[i];
-
-        if (std::fabs(expected - gpuOutput[i]) > MiniVLLM::RMS_NORM_EPS)
+        if (status != cudaSuccess)
         {
-            passed = false;
-            failedIndex = i;
-            expectedValue = expected;
-            break;
+            throw std::runtime_error(
+                std::string(operation) + ": " + cudaGetErrorString(status));
         }
     }
 
-    std::cout << std::left << std::setw(30)
-              << test.name;
-
-    if (passed)
+    template <typename T>
+    class DeviceBuffer
     {
-        std::cout << "PASS\n";
-    }
-    else
+    public:
+        explicit DeviceBuffer(size_t elementCount) : elementCount_(elementCount)
+        {
+            checkCuda(cudaMalloc(reinterpret_cast<void **>(&data_), elementCount_ * sizeof(T)), "cudaMalloc");
+        }
+
+        ~DeviceBuffer()
+        {
+            cudaFree(data_);
+        }
+
+        DeviceBuffer(const DeviceBuffer &) = delete;
+        DeviceBuffer &operator=(const DeviceBuffer &) = delete;
+
+        T *get() const { return data_; }
+
+        void copyFromHost(const std::vector<T> &source)
+        {
+            checkCuda(cudaMemcpy(data_, source.data(), elementCount_ * sizeof(T), cudaMemcpyHostToDevice), "cudaMemcpy host to device");
+        }
+
+        std::vector<T> copyToHost() const
+        {
+            std::vector<T> result(elementCount_);
+            checkCuda(cudaMemcpy(result.data(), data_, elementCount_ * sizeof(T), cudaMemcpyDeviceToHost), "cudaMemcpy device to host");
+            return result;
+        }
+
+    private:
+        size_t elementCount_;
+        T *data_ = nullptr;
+    };
+
+    struct TestCase
     {
-        std::cout << "FAIL\n";
+        std::string name;
+        size_t numTokens;
+        size_t hiddenSize;
+        std::vector<float> input;
+        std::vector<float> weights;
+    };
 
-        std::cout << "  Failed at index : "
-                  << failedIndex << '\n';
-
-        std::cout << "  Expected        : "
-                  << expectedValue << '\n';
-
-        std::cout << "  GPU             : "
-                  << gpuOutput[failedIndex] << '\n';
-
-        std::cout << "  Difference      : "
-                  << std::fabs(expectedValue - gpuOutput[failedIndex])
-                  << "\n\n";
+    float rmsNormReference(float input, float weight, double sumOfSquares, size_t hiddenSize)
+    {
+        const double rms = std::sqrt(sumOfSquares / static_cast<double>(hiddenSize) + kRmsNormEpsilon);
+        return static_cast<float>(static_cast<double>(input) / rms * static_cast<double>(weight));
     }
 
-    cudaFree(dInput);
-    cudaFree(dOutput);
-    cudaFree(dNormWeights);
+    bool almostEqual(float actual, float expected, float absTolerance, float relTolerance)
+    {
+        const float difference = std::fabs(actual - expected);
+        return difference <= absTolerance + relTolerance * std::max(std::fabs(actual), std::fabs(expected));
+    }
+
+    template <typename T>
+    std::vector<T> convertToStorage(const std::vector<float> &values);
+
+    template <>
+    std::vector<float> convertToStorage<float>(const std::vector<float> &values)
+    {
+        return values;
+    }
+
+    template <>
+    std::vector<__nv_bfloat16> convertToStorage<__nv_bfloat16>(const std::vector<float> &values)
+    {
+        std::vector<__nv_bfloat16> converted(values.size());
+        for (size_t index = 0; index < values.size(); ++index)
+            converted[index] = __float2bfloat16(values[index]);
+        return converted;
+    }
+
+    template <typename T>
+    float toFloat(T value);
+
+    template <>
+    float toFloat(float value)
+    {
+        return value;
+    }
+
+    template <>
+    float toFloat(__nv_bfloat16 value)
+    {
+        return __bfloat162float(value);
+    }
+
+    template <typename T>
+    bool runTest(const TestCase &test, MiniVLLM::DType dtype, const char *dtypeName, float absTolerance, float relTolerance)
+    {
+        if (test.hiddenSize == 0 || test.input.size() != test.numTokens * test.hiddenSize || test.weights.size() != test.hiddenSize)
+            throw std::invalid_argument("invalid RMSNorm test case: " + test.name);
+
+        const size_t elementCount = test.numTokens * test.hiddenSize;
+        const MiniVLLM::ModelConfig config = {
+            .DTYPE = dtype,
+            .HIDDEN_SIZE = test.hiddenSize,
+            .RMS_NORM_EPS = kRmsNormEpsilon,
+        };
+
+        const std::vector<T> input = convertToStorage<T>(test.input);
+        const std::vector<T> weights = convertToStorage<T>(test.weights);
+        DeviceBuffer<T> dInput(elementCount);
+        DeviceBuffer<T> dOutput(elementCount);
+        DeviceBuffer<T> dWeights(test.hiddenSize);
+        dInput.copyFromHost(input);
+        dWeights.copyFromHost(weights);
+
+        MiniVLLM::launchRMSNorm(config, test.numTokens, dOutput.get(), dInput.get(), dWeights.get());
+        checkCuda(cudaGetLastError(), "launchRMSNorm");
+        checkCuda(cudaDeviceSynchronize(), "RMSNorm execution");
+
+        const std::vector<T> output = dOutput.copyToHost();
+        for (size_t token = 0; token < test.numTokens; ++token)
+        {
+            double sumOfSquares = 0.0;
+            for (size_t dimension = 0; dimension < test.hiddenSize; ++dimension)
+            {
+                const float value = toFloat(input[token * test.hiddenSize + dimension]);
+                sumOfSquares += static_cast<double>(value) * value;
+            }
+
+            for (size_t dimension = 0; dimension < test.hiddenSize; ++dimension)
+            {
+                const size_t index = token * test.hiddenSize + dimension;
+                const float expected = rmsNormReference(
+                    toFloat(input[index]), toFloat(weights[dimension]), sumOfSquares, test.hiddenSize);
+                const float actual = toFloat(output[index]);
+                if (!almostEqual(actual, expected, absTolerance, relTolerance))
+                {
+                    std::cerr << "FAIL " << test.name << " [" << dtypeName << "] (token " << token << ", dimension " << dimension
+                              << "): expected " << expected << ", got " << actual << '\n';
+                    return false;
+                }
+            }
+        }
+
+        std::cout << "PASS " << test.name << " [" << dtypeName << "]\n";
+        return true;
+    }
+
+    TestCase makeRandomCase(std::string name, size_t numTokens, size_t hiddenSize, unsigned int seed)
+    {
+        std::mt19937 generator(seed);
+        std::uniform_real_distribution<float> inputDistribution(-10.0f, 10.0f);
+        std::uniform_real_distribution<float> weightDistribution(0.25f, 1.75f);
+
+        TestCase test{std::move(name), numTokens, hiddenSize, {}, {}};
+        test.input.resize(numTokens * hiddenSize);
+        test.weights.resize(hiddenSize);
+        for (float &value : test.input)
+            value = inputDistribution(generator);
+        for (float &value : test.weights)
+            value = weightDistribution(generator);
+        return test;
+    }
 }
 
 int main()
 {
-    std::vector<TestCase> tests =
-        {
-            {"Sequential",
-             {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
-             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
-
-            {"Mixed Signs",
-             {1.25f, -2.80f, 3.14f, -4.75f, 5.50f,
-              -6.33f, 7.91f, -8.62f, 9.27f, -10.48f},
-             {0.95f, 1.10f, 0.87f, 1.23f, 0.76f,
-              1.05f, 1.18f, 0.91f, 1.30f, 0.84f}},
-
-            {"All Ones",
-             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
-
-            {"Negative Inputs",
-             {-1, -2, -3, -4, -5, -6, -7, -8, -9, -10},
-             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
-
-            {"Random Weights",
-             {2, 4, 6, 8, 10, 12, 14, 16, 18, 20},
-             {0.3f, 0.7f, 1.1f, 1.5f, 0.2f,
-              0.9f, 1.8f, 0.6f, 1.3f, 2.0f}},
-
-            {"Tiny Values",
-             {0.001f, -0.002f, 0.003f, -0.004f, 0.005f,
-              -0.006f, 0.007f, -0.008f, 0.009f, -0.010f},
-             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1}}};
-
-    // Large random test (5000 dimensions)
+    try
     {
-        constexpr int N = 5000;
+        std::vector<TestCase> tests = {
+            {"single element", 1, 1, {3.0f}, {2.0f}},
+            {"mixed signs and weights", 1, 10,
+             {1.25f, -2.80f, 3.14f, -4.75f, 5.50f, -6.33f, 7.91f, -8.62f, 9.27f, -10.48f},
+             {0.95f, 1.10f, 0.87f, 1.23f, 0.76f, 1.05f, 1.18f, 0.91f, 1.30f, 0.84f}},
+            {"zero input", 3, 32, std::vector<float>(96, 0.0f), std::vector<float>(32, 1.0f)},
+            makeRandomCase("multiple tokens", 5, 257, 42),
+            makeRandomCase("block boundary: 1023", 2, 1023, 43),
+            makeRandomCase("block boundary: 1024", 2, 1024, 44),
+            makeRandomCase("block boundary: 1025", 2, 1025, 45),
+        };
 
-        TestCase randomTest;
-        randomTest.name = "Large Random (5000)";
-
-        randomTest.input.resize(N);
-        randomTest.normWeights.resize(N);
-
-        std::mt19937 rng(42);
-
-        std::uniform_real_distribution<float> inputDist(-10.0f, 10.0f);
-        std::uniform_real_distribution<float> weightDist(0.5f, 1.5f);
-
-        for (int i = 0; i < N; i++)
+        bool passed = true;
+        for (const TestCase &test : tests)
         {
-            randomTest.input[i] = inputDist(rng);
-            randomTest.normWeights[i] = weightDist(rng);
+            passed = runTest<float>(test, MiniVLLM::DType::Float32, "float32", 1.0e-5f, 1.0e-5f) && passed;
+            passed = runTest<__nv_bfloat16>(test, MiniVLLM::DType::BFloat16, "bfloat16", 1.0e-2f, 1.0e-2f) && passed;
         }
-
-        tests.push_back(std::move(randomTest));
+        return passed ? 0 : 1;
     }
-
-    for (const auto &test : tests)
+    catch (const std::exception &error)
     {
-        runTest(test);
+        std::cerr << "RMSNorm test error: " << error.what() << '\n';
+        return 1;
     }
-
-    return 0;
 }
