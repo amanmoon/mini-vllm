@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include <cuda_bf16.h>
+#include <cmath>
 
 namespace MiniVLLM
 {
@@ -25,7 +26,7 @@ namespace MiniVLLM
      */
 
     template <typename T>
-    __global__ void embeddingGatherKernel(size_t tokenEmbeddingDim, int *inputTokenIDArray, T *embeddedTokenArray, T *embeddingMatrix)
+    __global__ void embeddingGather(size_t tokenEmbeddingDim, int *inputTokenIDArray, T *embeddedTokenArray, T *embeddingMatrix)
     {
         int stride = (tokenEmbeddingDim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
         for (int i = 0; i < stride; ++i)
@@ -40,8 +41,8 @@ namespace MiniVLLM
         }
     }
 
-    template __global__ void embeddingGatherKernel<__nv_bfloat16>(size_t tokenEmbeddingDim, int *inputTokenIDArray, __nv_bfloat16 *embeddedTokenArray, __nv_bfloat16 *embeddingMatrix);
-    template __global__ void embeddingGatherKernel<float>(size_t tokenEmbeddingDim, int *inputTokenIDArray, float *embeddedTokenArray, float *embeddingMatrix);
+    template __global__ void embeddingGather<__nv_bfloat16>(size_t tokenEmbeddingDim, int *inputTokenIDArray, __nv_bfloat16 *embeddedTokenArray, __nv_bfloat16 *embeddingMatrix);
+    template __global__ void embeddingGather<float>(size_t tokenEmbeddingDim, int *inputTokenIDArray, float *embeddedTokenArray, float *embeddingMatrix);
 
     /**
      * @brief Computes the Root Mean Square (RMS) of a vector.
@@ -67,9 +68,9 @@ namespace MiniVLLM
      */
 
     template <typename T, typename AccT>
-    __device__ T rootMeanSquare(int vectorDim, T *inputVector, float epsilon)
+    __device__ AccT rootMeanSquare(size_t vectorDim, T *inputVector, AccT epsilon)
     {
-        __shared__ float sharedSum[THREADS_PER_BLOCK];
+        __shared__ AccT sharedSum[THREADS_PER_BLOCK];
 
         sharedSum[threadIdx.x] = 0.0f;
         int stride = (vectorDim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
@@ -79,7 +80,7 @@ namespace MiniVLLM
             if (internalBlockDim < vectorDim)
             {
                 int workIdx = blockIdx.x * vectorDim + internalBlockDim;
-                sharedSum[threadIdx.x] += (AccT)inputVector[workIdx] * (AccT)inputVector[workIdx];
+                sharedSum[threadIdx.x] += static_cast<AccT>(inputVector[workIdx]) * static_cast<AccT>(inputVector[workIdx]);
             }
         }
         __syncthreads();
@@ -91,11 +92,11 @@ namespace MiniVLLM
             __syncthreads();
         }
         if (threadIdx.x == 0)
-            sharedSum[0] = sqrtf((sharedSum[0] / vectorDim) + epsilon);
+            sharedSum[0] = sqrt((sharedSum[0] / static_cast<AccT>(vectorDim)) + epsilon);
 
         __syncthreads();
 
-        return (T)sharedSum[0];
+        return sharedSum[0];
     }
 
     /**
@@ -111,7 +112,7 @@ namespace MiniVLLM
      *
      * where
      *
-     *     RMS(input) = sqrt((1 / vectorDim) * Σ(input_i²) + RMS_NORM_EPS)
+     *     RMS(input) = sqrt((1 / vectorDim) * Σ(input_i²) + epsilon)
      *
      * @tparam T Data type of the input, output, and normalization weights.
      * @tparam AccT is the Data type of accumulator in the rootMeanSquare function used for increased numerical stability.
@@ -127,9 +128,9 @@ namespace MiniVLLM
      *   numerical stability.
      */
     template <typename T, typename AccT>
-    __global__ void rootMeanSquareNorm(int vectorDim, T *outputVector, T *inputVector, T *normWeights)
+    __global__ void rootMeanSquareNorm(size_t vectorDim, AccT epsilon, T *outputVector, T *inputVector, T *normWeights)
     {
-        T rmsValue = rootMeanSquare<T, AccT>(vectorDim, inputVector, RMS_NORM_EPS);
+        AccT rmsValue = rootMeanSquare<T, AccT>(vectorDim, inputVector, epsilon);
 
         int stride = (vectorDim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
         for (int i = 0; i < stride; ++i)
@@ -138,11 +139,114 @@ namespace MiniVLLM
             if (internalBlockDim < vectorDim)
             {
                 int workerIdx = blockIdx.x * vectorDim + internalBlockDim;
-                outputVector[workerIdx] = inputVector[workerIdx] / rmsValue * normWeights[workerIdx];
+                AccT out =
+                    static_cast<AccT>(inputVector[workerIdx]) /
+                    rmsValue *
+                    static_cast<AccT>(normWeights[internalBlockDim]);
+
+                outputVector[workerIdx] = static_cast<T>(out);
             }
         }
     }
 
-    template __global__ void rootMeanSquareNorm<__nv_bfloat16, float>(int vectorDim, __nv_bfloat16 *outputVector, __nv_bfloat16 *inputVector, __nv_bfloat16 *normWeights);
-    template __global__ void rootMeanSquareNorm<float, double>(int vectorDim, float *outputVector, float *inputVector, float *normWeights);
+    template __global__ void rootMeanSquareNorm<__nv_bfloat16, float>(size_t vectorDim, float epsilon, __nv_bfloat16 *outputVector, __nv_bfloat16 *inputVector, __nv_bfloat16 *normWeights);
+    template __global__ void rootMeanSquareNorm<float, double>(size_t vectorDim, double epsilon, float *outputVector, float *inputVector, float *normWeights);
+
+    /**
+     * @brief Precomputes the cosine and sine lookup tables used for Rotary Position
+     *        Embeddings (RoPE).
+     *
+     * Generates the rotation values for every `(position, dimension pair)` combination
+     * using the RoPE formulation:
+     *
+     *      θ = position / base^(2 * pair / headDim)
+     *
+     * The resulting values are stored in row-major order:
+     *
+     *      table[position][pair]
+     *
+     * where:
+     * - `position ∈ [0, maxSeqLen)`
+     * - `pair ∈ [0, headDim / 2)`
+     *
+     * The tables are later reused during inference to avoid recomputing trigonometric
+     * functions for every attention layer.
+     *
+     * Thread Mapping:
+     * - One CUDA block processes one position/token.
+     * - Threads within that block compute the position's dimension pairs.
+     *
+     * Memory Layout:
+     * - cosTable[position * (headDim / 2) + pair]
+     * - sinTable[position * (headDim / 2) + pair]
+     *
+     * @tparam AccT  Precision used for the lookup tables (e.g. float,
+     *               __nv_bfloat16).
+     *
+     * @param maxSeqLen Maximum supported sequence length.
+     * @param headDim   Dimension of a single attention head. Must be even.
+     * @param base      RoPE frequency base (typically 10000).
+     * @param cosTable  Output cosine lookup table of size
+     *                  maxSeqLen × (headDim / 2).
+     * @param sinTable  Output sine lookup table of size
+     *                  maxSeqLen × (headDim / 2).
+     */
+    template <typename AccT>
+    __global__ void createRoPETables(size_t maxSeqLen, size_t headDim, float base, AccT *cosTable, AccT *sinTable)
+    {
+        const size_t position = blockIdx.x;
+        if (position >= maxSeqLen)
+            return;
+
+        const size_t numPairs = headDim / 2;
+        const size_t stride = (numPairs + blockDim.x - 1) / blockDim.x;
+
+        for (size_t i = 0; i < stride; ++i)
+        {
+            const size_t pair = threadIdx.x + i * blockDim.x;
+            if (pair >= numPairs)
+                continue;
+
+            const float exponent =
+                (2.0f * static_cast<float>(pair)) / static_cast<float>(headDim);
+            const float invFreq = 1.0f / powf(base, exponent);
+            const float theta = static_cast<float>(position) * invFreq;
+            const size_t idx = position * numPairs + pair;
+
+            cosTable[idx] = static_cast<AccT>(cosf(theta));
+            sinTable[idx] = static_cast<AccT>(sinf(theta));
+        }
+    }
+
+    template __global__ void createRoPETables<__nv_bfloat16>(size_t maxSeqLen, size_t headDim, float base, __nv_bfloat16 *cosTable, __nv_bfloat16 *sinTable);
+    template __global__ void createRoPETables<float>(size_t maxSeqLen, size_t headDim, float base, float *cosTable, float *sinTable);
+
+    template <typename T, typename AccT>
+    __global__ void RoPEEmbeddings(size_t vectorDim, T *inputVector, AccT *cosTable, AccT *sinTable)
+    {
+        int stride = ((vectorDim / 2) + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+
+        for (int i = 0; i < stride; i++)
+        {
+            int currPairIdx = threadIdx.x + i * THREADS_PER_BLOCK;
+            if (currPairIdx < vectorDim / 2)
+            {
+                int tableIdx = blockIdx.x * (vectorDim / 2) + currPairIdx;
+
+                AccT cosTheta = cosTable[tableIdx];
+                AccT sinTheta = sinTable[tableIdx];
+
+                int workIdx = tableIdx * 2;
+
+                AccT tempIn1 = inputVector[workIdx];
+                AccT tempIn2 = inputVector[workIdx + 1];
+
+                inputVector[workIdx] = static_cast<T>(tempIn1 * cosTheta - tempIn2 * sinTheta);
+                inputVector[workIdx + 1] = static_cast<T>(tempIn1 * sinTheta + tempIn2 * cosTheta);
+            }
+        }
+    }
+
+    template __global__ void RoPEEmbeddings<__nv_bfloat16, float>(size_t vectorDim, __nv_bfloat16 *inputVector, float *cosTable, float *sinTable);
+    template __global__ void RoPEEmbeddings<float, float>(size_t vectorDim, float *inputVector, float *cosTable, float *sinTable);
 }

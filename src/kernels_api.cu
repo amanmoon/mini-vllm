@@ -11,9 +11,8 @@ namespace MiniVLLM
 {
 
     void launchEmbeddingGather(
-        DType dtype,
-        int numTokens,
-        size_t tokenEmbeddingDim,
+        const ModelConfig &config,
+        size_t numTokens,
         int *d_inputTokenIDs,
         void *d_embeddedTokens,
         void *d_embeddingMatrix)
@@ -21,19 +20,19 @@ namespace MiniVLLM
         dim3 grid(numTokens);
         dim3 block(THREADS_PER_BLOCK);
 
-        switch (dtype)
+        switch (config.DTYPE)
         {
         case DType::BFloat16:
-            embeddingGatherKernel<__nv_bfloat16><<<grid, block>>>(
-                tokenEmbeddingDim,
+            embeddingGather<__nv_bfloat16><<<grid, block>>>(
+                config.HIDDEN_SIZE,
                 d_inputTokenIDs,
                 reinterpret_cast<__nv_bfloat16 *>(d_embeddedTokens),
                 reinterpret_cast<__nv_bfloat16 *>(d_embeddingMatrix));
             break;
 
         case DType::Float32:
-            embeddingGatherKernel<float><<<grid, block>>>(
-                tokenEmbeddingDim,
+            embeddingGather<float><<<grid, block>>>(
+                config.HIDDEN_SIZE,
                 d_inputTokenIDs,
                 reinterpret_cast<float *>(d_embeddedTokens),
                 reinterpret_cast<float *>(d_embeddingMatrix));
@@ -42,14 +41,13 @@ namespace MiniVLLM
         default:
             throw std::runtime_error(
                 "launchEmbeddingGather: unsupported DType " +
-                std::to_string(static_cast<int>(dtype)));
+                std::to_string(static_cast<int>(config.DTYPE)));
         }
     }
 
     void launchRMSNorm(
-        DType dtype,
-        int numTokens,
-        int vectorDim,
+        const ModelConfig &config,
+        size_t numTokens,
         void *d_output,
         void *d_input,
         void *d_normWeights)
@@ -57,19 +55,20 @@ namespace MiniVLLM
         dim3 grid(numTokens);
         dim3 block(THREADS_PER_BLOCK);
 
-        switch (dtype)
+        switch (config.DTYPE)
         {
         case DType::BFloat16:
             rootMeanSquareNorm<__nv_bfloat16, float><<<grid, block>>>(
-                vectorDim,
-                reinterpret_cast<__nv_bfloat16 *>(d_output),
+                config.HIDDEN_SIZE,
+                config.RMS_NORM_EPS, reinterpret_cast<__nv_bfloat16 *>(d_output),
                 reinterpret_cast<__nv_bfloat16 *>(d_input),
                 reinterpret_cast<__nv_bfloat16 *>(d_normWeights));
             break;
 
         case DType::Float32:
             rootMeanSquareNorm<float, double><<<grid, block>>>(
-                vectorDim,
+                config.HIDDEN_SIZE,
+                static_cast<double>(config.RMS_NORM_EPS),
                 reinterpret_cast<float *>(d_output),
                 reinterpret_cast<float *>(d_input),
                 reinterpret_cast<float *>(d_normWeights));
@@ -78,7 +77,60 @@ namespace MiniVLLM
         default:
             throw std::runtime_error(
                 "launchRMSNorm: unsupported DType " +
-                std::to_string(static_cast<int>(dtype)));
+                std::to_string(static_cast<int>(config.DTYPE)));
+        }
+    }
+
+    void launchCreateRoPETables(
+        const ModelConfig &config,
+        void *cosTable,
+        void *sinTable)
+    {
+        dim3 block(THREADS_PER_BLOCK);
+        dim3 grid(config.MAX_POSITION_EMBEDDINGS);
+
+        // RoPE angles are always kept in float for numerical accuracy. This also
+        // matches the float accumulator consumed by both supported model dtypes.
+        createRoPETables<float><<<grid, block>>>(
+            config.MAX_POSITION_EMBEDDINGS,
+            config.HEAD_DIM,
+            config.ROPE_THETA,
+            reinterpret_cast<float *>(cosTable),
+            reinterpret_cast<float *>(sinTable));
+    }
+
+    void launchRoPEEmbeddings(
+        const ModelConfig &config,
+        size_t numTokens,
+        void *d_inputVector,
+        void *d_cosTable,
+        void *d_sinTable)
+    {
+        dim3 grid(numTokens);
+        dim3 block(THREADS_PER_BLOCK);
+
+        switch (config.DTYPE)
+        {
+        case DType::BFloat16:
+            RoPEEmbeddings<__nv_bfloat16, float><<<grid, block>>>(
+                config.HEAD_DIM,
+                reinterpret_cast<__nv_bfloat16 *>(d_inputVector),
+                reinterpret_cast<float *>(d_cosTable),
+                reinterpret_cast<float *>(d_sinTable));
+            break;
+
+        case DType::Float32:
+            RoPEEmbeddings<float, float><<<grid, block>>>(
+                config.HEAD_DIM,
+                reinterpret_cast<float *>(d_inputVector),
+                reinterpret_cast<float *>(d_cosTable),
+                reinterpret_cast<float *>(d_sinTable));
+            break;
+
+        default:
+            throw std::runtime_error(
+                "launchRoPEEmbeddings: unsupported DType " +
+                std::to_string(static_cast<int>(config.DTYPE)));
         }
     }
 
