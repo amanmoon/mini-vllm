@@ -38,6 +38,35 @@ namespace MiniVLLM
         std::map<std::string, Tensor> tensors;
     };
 
+    struct RopeScaling
+    {
+        float FACTOR;
+        float LOW_FREQ_FACTOR;
+        float HIGH_FREQ_FACTOR;
+        size_t ORIGINAL_MAX_POSITION_EMBEDDINGS;
+    };
+
+    struct ModelConfig
+    {
+        DType DTYPE;
+
+        size_t VOCAB_SIZE;
+
+        size_t HIDDEN_SIZE;
+        size_t NUM_ATTENTION_HEADS;
+        size_t NUM_KEY_VALUE_HEADS;
+        size_t HEAD_DIM;
+        size_t NUM_HIDDEN_LAYERS;
+
+        size_t INTERMEDIATE_SIZE;
+        size_t MAX_POSITION_EMBEDDINGS;
+
+        float RMS_NORM_EPS;
+        float ROPE_THETA;
+
+        RopeScaling ROPE_SCALING;
+    };
+
     // functions
     std::ostream &operator<<(std::ostream &os, DType type);
 
