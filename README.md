@@ -94,7 +94,7 @@ Here is the checklist of components and kernels needed for a complete LLM infere
 - [x] CUDA kernel engineering - embeddings
 - [x] RMSNorm and parallel reduction in CUDA
 - [x] RoPE (Rotary Positional Embeddings)
-- [ ] Residual connections
+- [x] Residual connections
 - [ ] cuBLAS GemmEx matrix multiplications
 - [ ] Attention mechanism
 - [ ] GQA (Grouped-Query Attention)

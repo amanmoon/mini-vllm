@@ -8,14 +8,14 @@ namespace MiniVLLM
 {
     void launchEmbeddingGather(
         const ModelConfig &config,
-        size_t numTokens,
+        int numTokens,
         int *d_inputTokenIDs,
         void *d_embeddedTokens,
         void *d_embeddingMatrix);
 
     void launchRMSNorm(
         const ModelConfig &config,
-        size_t numTokens,
+        int numTokens,
         void *d_output,
         void *d_input,
         void *d_normWeights);
@@ -27,9 +27,15 @@ namespace MiniVLLM
 
     void launchRoPEEmbeddings(
         const ModelConfig &config,
-        size_t numTokens,
+        int numTokens,
         void *d_inputVector,
         void *d_cosTable,
         void *d_sinTable);
+
+    void launchResidualAdd(
+        const ModelConfig &config,
+        int numTokens,
+        void *d_inputVector,
+        void *d_outputVector);
 
 }

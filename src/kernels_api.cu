@@ -12,7 +12,7 @@ namespace MiniVLLM
 
     void launchEmbeddingGather(
         const ModelConfig &config,
-        size_t numTokens,
+        int numTokens,
         int *d_inputTokenIDs,
         void *d_embeddedTokens,
         void *d_embeddingMatrix)
@@ -47,7 +47,7 @@ namespace MiniVLLM
 
     void launchRMSNorm(
         const ModelConfig &config,
-        size_t numTokens,
+        int numTokens,
         void *d_output,
         void *d_input,
         void *d_normWeights)
@@ -89,8 +89,6 @@ namespace MiniVLLM
         dim3 block(THREADS_PER_BLOCK);
         dim3 grid(config.MAX_POSITION_EMBEDDINGS);
 
-        // RoPE angles are always kept in float for numerical accuracy. This also
-        // matches the float accumulator consumed by both supported model dtypes.
         createRoPETables<float><<<grid, block>>>(
             config.MAX_POSITION_EMBEDDINGS,
             config.HEAD_DIM,
@@ -101,7 +99,7 @@ namespace MiniVLLM
 
     void launchRoPEEmbeddings(
         const ModelConfig &config,
-        size_t numTokens,
+        int numTokens,
         void *d_inputVector,
         void *d_cosTable,
         void *d_sinTable)
@@ -130,6 +128,38 @@ namespace MiniVLLM
         default:
             throw std::runtime_error(
                 "launchRoPEEmbeddings: unsupported DType " +
+                std::to_string(static_cast<int>(config.DTYPE)));
+        }
+    }
+
+    void launchResidualAdd(
+        const ModelConfig &config,
+        int numTokens,
+        void *d_inputVector,
+        void *d_outputVector)
+    {
+        dim3 grid(numTokens);
+        dim3 block(THREADS_PER_BLOCK);
+
+        switch (config.DTYPE)
+        {
+        case DType::BFloat16:
+            residualAdd<__nv_bfloat16><<<grid, block>>>(
+                config.HIDDEN_SIZE,
+                reinterpret_cast<__nv_bfloat16 *>(d_inputVector),
+                reinterpret_cast<__nv_bfloat16 *>(d_outputVector));
+            break;
+
+        case DType::Float32:
+            residualAdd<float><<<grid, block>>>(
+                config.HIDDEN_SIZE,
+                reinterpret_cast<float *>(d_inputVector),
+                reinterpret_cast<float *>(d_outputVector));
+            break;
+
+        default:
+            throw std::runtime_error(
+                "launchResidualAdd: unsupported DType " +
                 std::to_string(static_cast<int>(config.DTYPE)));
         }
     }

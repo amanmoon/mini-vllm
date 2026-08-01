@@ -26,7 +26,7 @@ namespace MiniVLLM
      */
 
     template <typename T>
-    __global__ void embeddingGather(size_t tokenEmbeddingDim, int *inputTokenIDArray, T *embeddedTokenArray, T *embeddingMatrix)
+    __global__ void embeddingGather(int tokenEmbeddingDim, int *inputTokenIDArray, T *embeddedTokenArray, T *embeddingMatrix)
     {
         int stride = (tokenEmbeddingDim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
         for (int i = 0; i < stride; ++i)
@@ -41,8 +41,8 @@ namespace MiniVLLM
         }
     }
 
-    template __global__ void embeddingGather<__nv_bfloat16>(size_t tokenEmbeddingDim, int *inputTokenIDArray, __nv_bfloat16 *embeddedTokenArray, __nv_bfloat16 *embeddingMatrix);
-    template __global__ void embeddingGather<float>(size_t tokenEmbeddingDim, int *inputTokenIDArray, float *embeddedTokenArray, float *embeddingMatrix);
+    template __global__ void embeddingGather<__nv_bfloat16>(int tokenEmbeddingDim, int *inputTokenIDArray, __nv_bfloat16 *embeddedTokenArray, __nv_bfloat16 *embeddingMatrix);
+    template __global__ void embeddingGather<float>(int tokenEmbeddingDim, int *inputTokenIDArray, float *embeddedTokenArray, float *embeddingMatrix);
 
     /**
      * @brief Computes the Root Mean Square (RMS) of a vector.
@@ -68,7 +68,7 @@ namespace MiniVLLM
      */
 
     template <typename T, typename AccT>
-    __device__ AccT rootMeanSquare(size_t vectorDim, T *inputVector, AccT epsilon)
+    __device__ AccT rootMeanSquare(int vectorDim, T *inputVector, AccT epsilon)
     {
         __shared__ AccT sharedSum[THREADS_PER_BLOCK];
 
@@ -128,7 +128,7 @@ namespace MiniVLLM
      *   numerical stability.
      */
     template <typename T, typename AccT>
-    __global__ void rootMeanSquareNorm(size_t vectorDim, AccT epsilon, T *outputVector, T *inputVector, T *normWeights)
+    __global__ void rootMeanSquareNorm(int vectorDim, AccT epsilon, T *outputVector, T *inputVector, T *normWeights)
     {
         AccT rmsValue = rootMeanSquare<T, AccT>(vectorDim, inputVector, epsilon);
 
@@ -149,8 +149,8 @@ namespace MiniVLLM
         }
     }
 
-    template __global__ void rootMeanSquareNorm<__nv_bfloat16, float>(size_t vectorDim, float epsilon, __nv_bfloat16 *outputVector, __nv_bfloat16 *inputVector, __nv_bfloat16 *normWeights);
-    template __global__ void rootMeanSquareNorm<float, double>(size_t vectorDim, double epsilon, float *outputVector, float *inputVector, float *normWeights);
+    template __global__ void rootMeanSquareNorm<__nv_bfloat16, float>(int vectorDim, float epsilon, __nv_bfloat16 *outputVector, __nv_bfloat16 *inputVector, __nv_bfloat16 *normWeights);
+    template __global__ void rootMeanSquareNorm<float, double>(int vectorDim, double epsilon, float *outputVector, float *inputVector, float *normWeights);
 
     /**
      * @brief Precomputes the cosine and sine lookup tables used for Rotary Position
@@ -192,18 +192,18 @@ namespace MiniVLLM
      *                  maxSeqLen × (headDim / 2).
      */
     template <typename AccT>
-    __global__ void createRoPETables(size_t maxSeqLen, size_t headDim, float base, AccT *cosTable, AccT *sinTable)
+    __global__ void createRoPETables(int maxSeqLen, int headDim, float base, AccT *cosTable, AccT *sinTable)
     {
-        const size_t position = blockIdx.x;
+        const int position = blockIdx.x;
         if (position >= maxSeqLen)
             return;
 
-        const size_t numPairs = headDim / 2;
-        const size_t stride = (numPairs + blockDim.x - 1) / blockDim.x;
+        const int numPairs = headDim / 2;
+        const int stride = (numPairs + blockDim.x - 1) / blockDim.x;
 
-        for (size_t i = 0; i < stride; ++i)
+        for (int i = 0; i < stride; ++i)
         {
-            const size_t pair = threadIdx.x + i * blockDim.x;
+            const int pair = threadIdx.x + i * blockDim.x;
             if (pair >= numPairs)
                 continue;
 
@@ -211,18 +211,18 @@ namespace MiniVLLM
                 (2.0f * static_cast<float>(pair)) / static_cast<float>(headDim);
             const float invFreq = 1.0f / powf(base, exponent);
             const float theta = static_cast<float>(position) * invFreq;
-            const size_t idx = position * numPairs + pair;
+            const int idx = position * numPairs + pair;
 
             cosTable[idx] = static_cast<AccT>(cosf(theta));
             sinTable[idx] = static_cast<AccT>(sinf(theta));
         }
     }
 
-    template __global__ void createRoPETables<__nv_bfloat16>(size_t maxSeqLen, size_t headDim, float base, __nv_bfloat16 *cosTable, __nv_bfloat16 *sinTable);
-    template __global__ void createRoPETables<float>(size_t maxSeqLen, size_t headDim, float base, float *cosTable, float *sinTable);
+    template __global__ void createRoPETables<__nv_bfloat16>(int maxSeqLen, int headDim, float base, __nv_bfloat16 *cosTable, __nv_bfloat16 *sinTable);
+    template __global__ void createRoPETables<float>(int maxSeqLen, int headDim, float base, float *cosTable, float *sinTable);
 
     template <typename T, typename AccT>
-    __global__ void RoPEEmbeddings(size_t vectorDim, T *inputVector, AccT *cosTable, AccT *sinTable)
+    __global__ void RoPEEmbeddings(int vectorDim, T *inputVector, AccT *cosTable, AccT *sinTable)
     {
         int stride = ((vectorDim / 2) + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
@@ -247,6 +247,46 @@ namespace MiniVLLM
         }
     }
 
-    template __global__ void RoPEEmbeddings<__nv_bfloat16, float>(size_t vectorDim, __nv_bfloat16 *inputVector, float *cosTable, float *sinTable);
-    template __global__ void RoPEEmbeddings<float, float>(size_t vectorDim, float *inputVector, float *cosTable, float *sinTable);
+    template __global__ void RoPEEmbeddings<__nv_bfloat16, float>(int vectorDim, __nv_bfloat16 *inputVector, float *cosTable, float *sinTable);
+    template __global__ void RoPEEmbeddings<float, float>(int vectorDim, float *inputVector, float *cosTable, float *sinTable);
+
+    /**
+     * @brief Adds a residual connection element-wise.
+     *
+     * Each CUDA block processes one vector (e.g., one token embedding). Since the
+     * vector dimension may exceed the number of threads in a block, each thread
+     * iterates over multiple elements with a stride of @c THREADS_PER_BLOCK until
+     * the entire vector has been processed.
+     *
+     * Thread mapping:
+     * - Block index (`blockIdx.x`) selects the vector.
+     * - Thread index (`threadIdx.x`) selects the starting element within the vector.
+     * - Each thread processes:
+     *   `threadIdx.x + k * THREADS_PER_BLOCK`
+     *   for `k = 0, 1, ...`.
+     *
+     * @tparam T Data type of the input and output vectors.
+     *
+     * @param vectorDim   Number of elements in each vector.
+     * @param inputVector Input residual vectors of shape `[numVectors, vectorDim]`.
+     * @param outputVector Output vectors of shape `[numVectors, vectorDim]`.
+     *                     Updated in-place as:
+     *                     `outputVector[i] += inputVector[i]`.
+     */
+    template <typename T>
+    __global__ void residualAdd(int vectorDim, T *inputVector, T *outputVector)
+    {
+        int stride = (vectorDim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+        for (int i = 0; i < stride; ++i)
+        {
+            int internalBlockDim = threadIdx.x + i * THREADS_PER_BLOCK;
+            if (internalBlockDim < vectorDim)
+            {
+                int workIdx = blockIdx.x * vectorDim + internalBlockDim;
+                outputVector[workIdx] += inputVector[workIdx];
+            }
+        }
+    }
+    template __global__ void residualAdd<__nv_bfloat16>(int vectorDim, __nv_bfloat16 *inputVector, __nv_bfloat16 *outputVector);
+    template __global__ void residualAdd<float>(int vectorDim, float *inputVector, float *outputVector);
 }
