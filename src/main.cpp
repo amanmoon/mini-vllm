@@ -1,6 +1,6 @@
 #include "utils.hpp"
 #include "load_weights.hpp"
-#include "kernels_api.hpp"   // plain-C++ wrappers — no CUDA syntax needed here
+#include "kernels_api.hpp" // plain-C++ wrappers — no CUDA syntax needed here
 #include "llama.hpp"
 
 #include <cuda_runtime.h>
@@ -26,10 +26,10 @@ int main()
         tokens.size() * sizeof(int),
         cudaMemcpyHostToDevice);
 
-    static constexpr std::size_t BF16_SIZE = 2; 
+    static constexpr std::size_t BF16_SIZE = 2;
 
     void *d_embedded = nullptr;
-    cudaMalloc(&d_embedded, numTokens * modelConfig.HIDDEN_SIZE* BF16_SIZE);
+    cudaMalloc(&d_embedded, numTokens * modelConfig.HIDDEN_SIZE * BF16_SIZE);
 
     void *embed_weight_ptr =
         static_cast<uint8_t *>(weights.data_ptr) +

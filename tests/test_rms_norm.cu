@@ -30,7 +30,7 @@ namespace
     class DeviceBuffer
     {
     public:
-        explicit DeviceBuffer(size_t elementCount) : elementCount_(elementCount)
+        explicit DeviceBuffer(int elementCount) : elementCount_(elementCount)
         {
             checkCuda(cudaMalloc(reinterpret_cast<void **>(&data_), elementCount_ * sizeof(T)), "cudaMalloc");
         }
@@ -58,20 +58,20 @@ namespace
         }
 
     private:
-        size_t elementCount_;
+        int elementCount_;
         T *data_ = nullptr;
     };
 
     struct TestCase
     {
         std::string name;
-        size_t numTokens;
-        size_t hiddenSize;
+        int numTokens;
+        int hiddenSize;
         std::vector<float> input;
         std::vector<float> weights;
     };
 
-    float rmsNormReference(float input, float weight, double sumOfSquares, size_t hiddenSize)
+    float rmsNormReference(float input, float weight, double sumOfSquares, int hiddenSize)
     {
         const double rms = std::sqrt(sumOfSquares / static_cast<double>(hiddenSize) + kRmsNormEpsilon);
         return static_cast<float>(static_cast<double>(input) / rms * static_cast<double>(weight));
@@ -96,7 +96,7 @@ namespace
     std::vector<__nv_bfloat16> convertToStorage<__nv_bfloat16>(const std::vector<float> &values)
     {
         std::vector<__nv_bfloat16> converted(values.size());
-        for (size_t index = 0; index < values.size(); ++index)
+        for (int index = 0; index < values.size(); ++index)
             converted[index] = __float2bfloat16(values[index]);
         return converted;
     }
@@ -122,7 +122,7 @@ namespace
         if (test.hiddenSize == 0 || test.input.size() != test.numTokens * test.hiddenSize || test.weights.size() != test.hiddenSize)
             throw std::invalid_argument("invalid RMSNorm test case: " + test.name);
 
-        const size_t elementCount = test.numTokens * test.hiddenSize;
+        const int elementCount = test.numTokens * test.hiddenSize;
         const MiniVLLM::ModelConfig config = {
             .DTYPE = dtype,
             .HIDDEN_SIZE = test.hiddenSize,
@@ -142,18 +142,18 @@ namespace
         checkCuda(cudaDeviceSynchronize(), "RMSNorm execution");
 
         const std::vector<T> output = dOutput.copyToHost();
-        for (size_t token = 0; token < test.numTokens; ++token)
+        for (int token = 0; token < test.numTokens; ++token)
         {
             double sumOfSquares = 0.0;
-            for (size_t dimension = 0; dimension < test.hiddenSize; ++dimension)
+            for (int dimension = 0; dimension < test.hiddenSize; ++dimension)
             {
                 const float value = toFloat(input[token * test.hiddenSize + dimension]);
                 sumOfSquares += static_cast<double>(value) * value;
             }
 
-            for (size_t dimension = 0; dimension < test.hiddenSize; ++dimension)
+            for (int dimension = 0; dimension < test.hiddenSize; ++dimension)
             {
-                const size_t index = token * test.hiddenSize + dimension;
+                const int index = token * test.hiddenSize + dimension;
                 const float expected = rmsNormReference(
                     toFloat(input[index]), toFloat(weights[dimension]), sumOfSquares, test.hiddenSize);
                 const float actual = toFloat(output[index]);
@@ -170,7 +170,7 @@ namespace
         return true;
     }
 
-    TestCase makeRandomCase(std::string name, size_t numTokens, size_t hiddenSize, unsigned int seed)
+    TestCase makeRandomCase(std::string name, int numTokens, int hiddenSize, unsigned int seed)
     {
         std::mt19937 generator(seed);
         std::uniform_real_distribution<float> inputDistribution(-10.0f, 10.0f);

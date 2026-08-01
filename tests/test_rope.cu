@@ -27,7 +27,7 @@ namespace
     class DeviceBuffer
     {
     public:
-        explicit DeviceBuffer(size_t elementCount) : elementCount_(elementCount)
+        explicit DeviceBuffer(int elementCount) : elementCount_(elementCount)
         {
             checkCuda(cudaMalloc(reinterpret_cast<void **>(&data_), elementCount_ * sizeof(T)), "cudaMalloc");
         }
@@ -52,15 +52,15 @@ namespace
         }
 
     private:
-        size_t elementCount_;
+        int elementCount_;
         T *data_ = nullptr;
     };
 
     struct TestCase
     {
         std::string name;
-        size_t numTokens;
-        size_t headDim;
+        int numTokens;
+        int headDim;
         float base;
         std::vector<float> input;
     };
@@ -73,16 +73,16 @@ namespace
 
     void createReferenceTables(const TestCase &test, std::vector<float> &cosTable, std::vector<float> &sinTable)
     {
-        const size_t pairCount = test.headDim / 2;
+        const int pairCount = test.headDim / 2;
         cosTable.resize(test.numTokens * pairCount);
         sinTable.resize(test.numTokens * pairCount);
-        for (size_t position = 0; position < test.numTokens; ++position)
+        for (int position = 0; position < test.numTokens; ++position)
         {
-            for (size_t pair = 0; pair < pairCount; ++pair)
+            for (int pair = 0; pair < pairCount; ++pair)
             {
                 const float exponent = 2.0f * static_cast<float>(pair) / static_cast<float>(test.headDim);
                 const float theta = static_cast<float>(position) / std::pow(test.base, exponent);
-                const size_t index = position * pairCount + pair;
+                const int index = position * pairCount + pair;
                 cosTable[index] = std::cos(theta);
                 sinTable[index] = std::sin(theta);
             }
@@ -99,7 +99,7 @@ namespace
     std::vector<__nv_bfloat16> convertToStorage<__nv_bfloat16>(const std::vector<float> &values)
     {
         std::vector<__nv_bfloat16> converted(values.size());
-        for (size_t index = 0; index < values.size(); ++index)
+        for (int index = 0; index < values.size(); ++index)
             converted[index] = __float2bfloat16(values[index]);
         return converted;
     }
@@ -119,8 +119,8 @@ namespace
         if (test.numTokens == 0 || test.headDim == 0 || test.headDim % 2 != 0 || test.input.size() != test.numTokens * test.headDim)
             throw std::invalid_argument("invalid RoPE test case: " + test.name);
 
-        const size_t elementCount = test.numTokens * test.headDim;
-        const size_t tableElementCount = test.numTokens * (test.headDim / 2);
+        const int elementCount = test.numTokens * test.headDim;
+        const int tableElementCount = test.numTokens * (test.headDim / 2);
         const MiniVLLM::ModelConfig config = {
             .DTYPE = dtype,
             .HEAD_DIM = test.headDim,
@@ -144,7 +144,7 @@ namespace
 
         const std::vector<float> actualCos = dCosTable.copyToHost();
         const std::vector<float> actualSin = dSinTable.copyToHost();
-        for (size_t index = 0; index < tableElementCount; ++index)
+        for (int index = 0; index < tableElementCount; ++index)
         {
             if (!almostEqual(actualCos[index], expectedCos[index], kTableTolerance, kTableTolerance) ||
                 !almostEqual(actualSin[index], expectedSin[index], kTableTolerance, kTableTolerance))
@@ -159,12 +159,12 @@ namespace
         checkCuda(cudaDeviceSynchronize(), "RoPE embedding execution");
 
         const std::vector<T> actual = dEmbeddings.copyToHost();
-        for (size_t position = 0; position < test.numTokens; ++position)
+        for (int position = 0; position < test.numTokens; ++position)
         {
-            for (size_t pair = 0; pair < test.headDim / 2; ++pair)
+            for (int pair = 0; pair < test.headDim / 2; ++pair)
             {
-                const size_t tableIndex = position * (test.headDim / 2) + pair;
-                const size_t embeddingIndex = tableIndex * 2;
+                const int tableIndex = position * (test.headDim / 2) + pair;
+                const int embeddingIndex = tableIndex * 2;
                 const float first = toFloat(input[embeddingIndex]);
                 const float second = toFloat(input[embeddingIndex + 1]);
                 const float expectedFirst = first * expectedCos[tableIndex] - second * expectedSin[tableIndex];
@@ -183,7 +183,7 @@ namespace
         return true;
     }
 
-    TestCase makeRandomCase(std::string name, size_t numTokens, size_t headDim, float base, unsigned int seed)
+    TestCase makeRandomCase(std::string name, int numTokens, int headDim, float base, unsigned int seed)
     {
         std::mt19937 generator(seed);
         std::uniform_real_distribution<float> distribution(-5.0f, 5.0f);

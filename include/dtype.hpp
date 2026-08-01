@@ -43,23 +43,23 @@ namespace MiniVLLM
         float FACTOR;
         float LOW_FREQ_FACTOR;
         float HIGH_FREQ_FACTOR;
-        size_t ORIGINAL_MAX_POSITION_EMBEDDINGS;
+        int ORIGINAL_MAX_POSITION_EMBEDDINGS;
     };
 
     struct ModelConfig
     {
         DType DTYPE;
 
-        size_t VOCAB_SIZE;
+        int VOCAB_SIZE;
 
-        size_t HIDDEN_SIZE;
-        size_t NUM_ATTENTION_HEADS;
-        size_t NUM_KEY_VALUE_HEADS;
-        size_t HEAD_DIM;
-        size_t NUM_HIDDEN_LAYERS;
+        int HIDDEN_SIZE;
+        int NUM_ATTENTION_HEADS;
+        int NUM_KEY_VALUE_HEADS;
+        int HEAD_DIM;
+        int NUM_HIDDEN_LAYERS;
 
-        size_t INTERMEDIATE_SIZE;
-        size_t MAX_POSITION_EMBEDDINGS;
+        int INTERMEDIATE_SIZE;
+        int MAX_POSITION_EMBEDDINGS;
 
         float RMS_NORM_EPS;
         float ROPE_THETA;
