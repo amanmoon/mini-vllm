@@ -4,6 +4,7 @@
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 #include <stdexcept>
 #include <string>
 
@@ -164,4 +165,55 @@ namespace MiniVLLM
         }
     }
 
+    void launchGEMM(
+        const ModelConfig &config,
+        int m, int n, int k,
+        void *d_output, const void *d_a, const void *d_b,
+        bool transposeA, bool transposeB,
+        float alpha, float beta)
+    {
+        cudaDataType_t dataType;
+        if (config.DTYPE == DType::BFloat16)
+            dataType = CUDA_R_16BF;
+        else if (config.DTYPE == DType::Float32)
+            dataType = CUDA_R_32F;
+        else
+            throw std::runtime_error(
+                "launchGEMM: unsupported DType " +
+                std::to_string(static_cast<int>(config.DTYPE)));
+
+        const cublasOperation_t opA = transposeA ? CUBLAS_OP_T : CUBLAS_OP_N;
+        const cublasOperation_t opB = transposeB ? CUBLAS_OP_T : CUBLAS_OP_N;
+
+        const int lda = transposeA ? m : k;
+        const int ldb = transposeB ? k : n;
+
+        static cublasHandle_t handle = nullptr;
+        if (handle == nullptr)
+        {
+            const cublasStatus_t createStatus = cublasCreate(&handle);
+            if (createStatus != CUBLAS_STATUS_SUCCESS)
+            {
+                throw std::runtime_error(
+                    "cublasCreate failed with cuBLAS status " +
+                    std::to_string(static_cast<int>(createStatus)));
+            }
+        }
+
+        const cublasStatus_t gemmStatus = cublasGemmEx(
+            handle, opB, opA, 
+            n, m, k,
+            &alpha, d_b, dataType, ldb,
+            d_a, dataType, lda, &beta,
+            d_output, dataType, n,
+            CUBLAS_COMPUTE_32F,
+            CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+
+        if (gemmStatus != CUBLAS_STATUS_SUCCESS)
+        {
+            throw std::runtime_error(
+                "cublasGemmEx failed with cuBLAS status " +
+                std::to_string(static_cast<int>(gemmStatus)));
+        }
+    }
 }

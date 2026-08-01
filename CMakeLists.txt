@@ -35,6 +35,7 @@ target_include_directories(transformer_lib PUBLIC
 
 target_link_libraries(transformer_lib PUBLIC
     CUDA::cudart
+    CUDA::cublas
 )
 
 # -----------------------------------------------------------------------------

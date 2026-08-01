@@ -38,4 +38,17 @@ namespace MiniVLLM
         void *d_inputVector,
         void *d_outputVector);
 
+    void launchGEMM(
+        const ModelConfig &config,
+        int m,
+        int n,
+        int k,
+        void *d_output,
+        const void *d_a,
+        const void *d_b,
+        bool transposeA = false,
+        bool transposeB = false,
+        float alpha = 1.0f,
+        float beta = 0.0f);
+
 }
