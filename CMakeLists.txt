@@ -81,3 +81,17 @@ target_link_libraries(test_rope PRIVATE
 )
 
 add_test(NAME rope COMMAND test_rope)
+
+add_executable(test_residual_add
+    tests/test_residual_add.cu
+)
+
+set_target_properties(test_residual_add PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+)
+
+target_link_libraries(test_residual_add PRIVATE
+    transformer_lib
+)
+
+add_test(NAME residual_add COMMAND test_residual_add)
