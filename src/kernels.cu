@@ -289,4 +289,87 @@ namespace MiniVLLM
     }
     template __global__ void residualAdd<__nv_bfloat16>(int vectorDim, __nv_bfloat16 *inputVector, __nv_bfloat16 *outputVector);
     template __global__ void residualAdd<float>(int vectorDim, float *inputVector, float *outputVector);
+
+    /**
+     * @brief Computes scaled dot-product attention scores for all query heads using
+     *        Grouped Query Attention (GQA).
+     *
+     * Each query head computes:
+     *
+     *      AttentionScores = Q_head × K_headᵀ
+     *
+     * where:
+     *  - Q_head has shape (numTokens, headDim)
+     *  - K_head has shape (numTokens, headDim)
+     *  - AttentionScores has shape (numTokens, numTokens)
+     *
+     * In GQA, multiple query heads share the same key head. The mapping is:
+     *
+     *      keyValueHead = queryHead / (attentionHeads / keyValueHeads)
+     *
+     * For example, with 32 query heads and 8 key/value heads:
+     *
+     *      Q0-Q3   -> KV0
+     *      Q4-Q7   -> KV1
+     *      ...
+     *      Q28-Q31 -> KV7
+     *
+     * The function computes the attention score matrix for every query head
+     * independently using cuBLAS GEMM.
+     *
+     * @tparam T Data type of the projections (e.g. __nv_bfloat16).
+     *
+     * @param attentionHeads Number of query attention heads.
+     * @param keyValueHeads Number of key/value heads.
+     * @param headDim Dimension of each attention head.
+     * @param numTokens Number of tokens in the sequence.
+     * @param attentionAlpha GEMM scaling factor α.
+     * @param attentionBeta GEMM accumulation factor β.
+     * @param queryProjection Pointer to the query projection tensor with layout
+     *        (numTokens, attentionHeads * headDim).
+     * @param keyProjection Pointer to the key projection tensor with layout
+     *        (numTokens, keyValueHeads * headDim).
+     * @param attentionScore Output buffer storing attention score matrices with
+     *        layout (attentionHeads, numTokens, numTokens).
+     *
+     * @note The projection tensors are assumed to be stored contiguously in
+     *       token-major order, where each token contains all attention head
+     *       vectors sequentially.
+     *
+     * @note Accumulation is performed in FP32 while the input and output tensors
+     *       are stored in type T.
+     */
+    template <typename T>
+    __device__ void getGroupedQueryAttentionScores(int attentionHeads, int keyValueHeads, int headDim, int numTokens, const float &attentionAlpha, const float &attentionBeta, T *queryProjection, T *keyProjection, T *attentionScore)
+    {
+        int gqaRatio = attentionHeads / keyValueHeads;
+        for (int headNum = 0; headNum < attentionHeads; headNum++)
+        {
+            int keyValueIdx = headNum / gqaRatio;
+
+            T *queryHead = queryProjection + headNum * headDim;
+            T *keyHead = keyProjection + keyValueIdx * headDim;
+            T *attentionHead = attentionScore + headNum * numTokens * numTokens;
+
+            cublasStatus_t attn_score_status = cublasGemmEx(cublas_handle,
+                                                            CUBLAS_OP_T,
+                                                            CUBLAS_OP_N,
+                                                            numTokens,
+                                                            numTokens,
+                                                            headDim,
+                                                            &attentionAlpha,
+                                                            keyHead,
+                                                            CUDA_R_16BF,
+                                                            keyValueHeads * headDim,
+                                                            queryHead,
+                                                            CUDA_R_16BF,
+                                                            attentionHeads * headDim,
+                                                            &attentionBeta,
+                                                            attentionHead,
+                                                            CUDA_R_16BF,
+                                                            numTokens,
+                                                            CUBLAS_COMPUTE_32F,
+                                                            CUBLAS_GEMM_DEFAULT);
+        }
+    }
 }
