@@ -97,10 +97,10 @@ Here is the checklist of components and kernels needed for a complete LLM infere
 - [x] Residual connections
 - [x] matrix multiplications
 - [ ] Attention mechanism
-- [ ] GQA (Grouped-Query Attention)
+- [x] GQA (Grouped-Query Attention)
 - [ ] SiLU activation function
 - [ ] Softmax (Online softmax)
-- [ ] Causal masking
+- [x] Causal masking
 - [ ] Argmax sampling
 - [ ] Feed Forward Network
 - [ ] KV cache management
