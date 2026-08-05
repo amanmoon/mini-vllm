@@ -341,7 +341,8 @@ namespace MiniVLLM
      *       are stored in type T.
      */
     template <typename T>
-    __device__ void getGroupedQueryAttentionScores(int attentionHeads, int keyValueHeads, int headDim, int numTokens, const float &attentionAlpha, const float &attentionBeta, T *queryProjection, T *keyProjection, T *attentionScore)
+    __device__ void getGroupedQueryAttentionScores(int attentionHeads, int keyValueHeads, int headDim, int numTokens, const float &attentionAlpha, const float &attentionBeta,
+                                                   cublasHandle_t cublas_handle, T *queryProjection, T *keyProjection, T *attentionScore)
     {
         int gqaRatio = attentionHeads / keyValueHeads;
         for (int headNum = 0; headNum < attentionHeads; headNum++)
@@ -489,6 +490,41 @@ namespace MiniVLLM
         {
             attentionScore[rowOffset + col] =
                 static_cast<T>(static_cast<float>(attentionScore[rowOffset + col]) / rowSum);
+        }
+    }
+
+    template <typename T>
+    __device__ void attentionOutput(int attentionHeads, int keyValueHeads, int headDim, int numTokens, const float &attentionAlpha, const float &attentionBeta,
+                                    cublasHandle_t cublas_handle, T *attentionScore, T *valueProjection, T *attentionOutput)
+    {
+        int gqaRatio = attentionHeads / keyValueHeads;
+        for (int headNum = 0; headNum < attentionHeads; headNum++)
+        {
+            int keyValueIdx = headNum / gqaRatio;
+
+            T *valueHead = valueProjection + keyValueIdx * headDim;
+            T *attentionScoreHead = attentionScore + headNum * numTokens * numTokens;
+            T *outputHead = attentionOutput + headNum * headDim;
+
+            cublasStatus_t attn_score_status = cublasGemmEx(cublas_handle,
+                                                            CUBLAS_OP_N,
+                                                            CUBLAS_OP_N,
+                                                            headDim,
+                                                            numTokens,
+                                                            numTokens,
+                                                            &alpha,
+                                                            valueHead,
+                                                            CUDA_R_16BF,
+                                                            keyValueHeads * headDim,
+                                                            attentionScoreHead,
+                                                            CUDA_R_16BF,
+                                                            numTokens,
+                                                            &beta,
+                                                            outputHead,
+                                                            CUDA_R_16BF,
+                                                            attentionHeads * headDim,
+                                                            CUBLAS_COMPUTE_32F,
+                                                            CUBLAS_GEMM_DEFAULT);
         }
     }
 }
