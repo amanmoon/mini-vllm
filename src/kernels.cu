@@ -429,4 +429,66 @@ namespace MiniVLLM
             }
         }
     }
+
+    template <typename T>
+    __device__ void softmax(int numTokens, T *attentionScore)
+    {
+        __shared__ float shared[THREADS_PER_BLOCK];
+
+        const int head = blockIdx.x;
+        const int row = blockIdx.y;
+
+        const int headOffset = head * numTokens * numTokens;
+        const int rowOffset = headOffset + row * numTokens;
+
+        float localMax = -HUGE_VALUE_FLOAT;
+
+        for (int col = threadIdx.x; col < numTokens; col += blockDim.x)
+        {
+            float val = static_cast<float>(attentionScore[rowOffset + col]);
+            localMax = fmaxf(localMax, val);
+        }
+
+        shared[threadIdx.x] = localMax;
+        __syncthreads();
+
+        for (int offset = blockDim.x / 2; offset > 0; offset >>= 1)
+        {
+            if (threadIdx.x < offset)
+                shared[threadIdx.x] =
+                    fmaxf(shared[threadIdx.x], shared[threadIdx.x + offset]);
+
+            __syncthreads();
+        }
+
+        float rowMax = shared[0];
+        float localSum = 0.0f;
+
+        for (int col = threadIdx.x; col < numTokens; col += blockDim.x)
+        {
+            float val = expf(static_cast<float>(attentionScore[rowOffset + col]) - rowMax);
+
+            attentionScore[rowOffset + col] = static_cast<T>(val);
+            localSum += val;
+        }
+
+        shared[threadIdx.x] = localSum;
+        __syncthreads();
+
+        for (int offset = blockDim.x / 2; offset > 0; offset >>= 1)
+        {
+            if (threadIdx.x < offset)
+                shared[threadIdx.x] += shared[threadIdx.x + offset];
+
+            __syncthreads();
+        }
+
+        float rowSum = shared[0];
+
+        for (int col = threadIdx.x; col < numTokens; col += blockDim.x)
+        {
+            attentionScore[rowOffset + col] =
+                static_cast<T>(static_cast<float>(attentionScore[rowOffset + col]) / rowSum);
+        }
+    }
 }
