@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cublas_v2.h>
+
 namespace MiniVLLM
 {
     template <typename T>
@@ -16,4 +18,18 @@ namespace MiniVLLM
 
     template <typename T>
     __global__ void residualAdd(int vectorDim, T *inputVector, T *outputVector);
+
+    template <typename T>
+    void getGroupedQueryAttentionScores(int attentionHeads, int keyValueHeads, int headDim, int numTokens, const float &attentionAlpha, const float &attentionBeta,
+                                        cublasHandle_t cublas_handle, T *queryProjection, T *keyProjection, T *attentionScore);
+
+    template <typename T>
+    __global__ void causalMask(int numTokens, T *attentionScore);
+
+    template <typename T>
+    __global__ void softmax(int numTokens, T *attentionScore);
+
+    template <typename T>
+    void computeAttentionOutput(int attentionHeads, int keyValueHeads, int headDim, int numTokens, const float &attentionAlpha, const float &attentionBeta,
+                                cublasHandle_t cublas_handle, T *attentionScore, T *valueProjection, T *attentionOutput);
 }

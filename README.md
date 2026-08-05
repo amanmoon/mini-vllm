@@ -96,7 +96,7 @@ Here is the checklist of components and kernels needed for a complete LLM infere
 - [x] RoPE (Rotary Positional Embeddings)
 - [x] Residual connections
 - [x] matrix multiplications
-- [ ] Attention mechanism
+- [x] Attention mechanism
 - [x] GQA (Grouped-Query Attention)
 - [ ] SiLU activation function
 - [x] Softmax

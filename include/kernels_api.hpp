@@ -3,6 +3,7 @@
 #include "dtype.hpp"
 
 #include <cstddef>
+#include <cublas_v2.h>
 
 namespace MiniVLLM
 {
@@ -51,4 +52,12 @@ namespace MiniVLLM
         float alpha = 1.0f,
         float beta = 0.0f);
 
+    void launchGroupQueryAttention(
+        const ModelConfig &config,
+        cublasHandle_t cublas_handle,
+        int numTokens,
+        void *d_qProjection,
+        void *d_kProjection,
+        void *d_vProjection,
+        void *d_oProjection);
 }

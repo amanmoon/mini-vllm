@@ -201,7 +201,7 @@ namespace MiniVLLM
         }
 
         const cublasStatus_t gemmStatus = cublasGemmEx(
-            handle, opB, opA, 
+            handle, opB, opA,
             n, m, k,
             &alpha, d_b, dataType, ldb,
             d_a, dataType, lda, &beta,
@@ -214,6 +214,115 @@ namespace MiniVLLM
             throw std::runtime_error(
                 "cublasGemmEx failed with cuBLAS status " +
                 std::to_string(static_cast<int>(gemmStatus)));
+        }
+    }
+
+    template <typename T>
+    void attention(cublasHandle_t cublas_handle,
+                   int attentionHeads,
+                   int keyValueHeads,
+                   int headDim,
+                   int numTokens,
+                   T *queryProjection,
+                   T *keyProjection,
+                   T *valueProjection,
+                   T *attentionScore,
+                   T *attentionOutput)
+    {
+        float keyQueryAlpha = 1.0f / sqrt(headDim);
+        constexpr float attentionValueAlpha = 1.0f;
+        constexpr float beta = 0.0f;
+
+        getGroupedQueryAttentionScores<T>(attentionHeads,
+                                          keyValueHeads,
+                                          headDim,
+                                          numTokens,
+                                          keyQueryAlpha,
+                                          beta,
+                                          cublas_handle,
+                                          queryProjection,
+                                          keyProjection,
+                                          attentionScore);
+
+        causalMask<<<attentionHeads, THREADS_PER_BLOCK>>>(numTokens, attentionScore);
+
+        dim3 softmaxGrid(attentionHeads, numTokens);
+
+        softmax<T><<<softmaxGrid, THREADS_PER_BLOCK>>>(numTokens, attentionScore);
+
+        computeAttentionOutput<T>(attentionHeads,
+                                  keyValueHeads,
+                                  headDim,
+                                  numTokens,
+                                  attentionValueAlpha,
+                                  beta,
+                                  cublas_handle,
+                                  attentionScore,
+                                  valueProjection,
+                                  attentionOutput);
+    }
+
+    void launchGroupQueryAttention(
+        const ModelConfig &config,
+        cublasHandle_t cublas_handle,
+        int numTokens,
+        void *d_qProjection,
+        void *d_kProjection,
+        void *d_vProjection,
+        void *d_oProjection)
+    {
+        size_t attentionScoreSize = static_cast<size_t>(config.NUM_ATTENTION_HEADS) * numTokens * numTokens;
+
+        switch (config.DTYPE)
+        {
+        case DType::BFloat16:
+        {
+            __nv_bfloat16 *d_attentionScore;
+            cudaMalloc(&d_attentionScore,
+                       attentionScoreSize * sizeof(__nv_bfloat16));
+
+            attention<__nv_bfloat16>(
+                cublas_handle,
+                config.NUM_ATTENTION_HEADS,
+                config.NUM_KEY_VALUE_HEADS,
+                config.HEAD_DIM,
+                numTokens,
+                reinterpret_cast<__nv_bfloat16 *>(d_qProjection),
+                reinterpret_cast<__nv_bfloat16 *>(d_kProjection),
+                reinterpret_cast<__nv_bfloat16 *>(d_vProjection),
+                d_attentionScore,
+                reinterpret_cast<__nv_bfloat16 *>(d_oProjection));
+
+            cudaFree(d_attentionScore);
+            break;
+        }
+
+        case DType::Float32:
+        {
+            float *d_attentionScore;
+            cudaMalloc(&d_attentionScore,
+                       attentionScoreSize * sizeof(float));
+
+            attention<float>(
+                cublas_handle,
+                config.NUM_ATTENTION_HEADS,
+                config.NUM_KEY_VALUE_HEADS,
+                config.HEAD_DIM,
+                numTokens,
+                reinterpret_cast<float *>(d_qProjection),
+                reinterpret_cast<float *>(d_kProjection),
+                reinterpret_cast<float *>(d_vProjection),
+                d_attentionScore,
+                reinterpret_cast<float *>(d_oProjection));
+
+            cudaFree(d_attentionScore);
+            break;
+        }
+
+        default:
+            throw std::runtime_error(
+                "launchGroupQueryAttention: unsupported DType " +
+                std::to_string(static_cast<int>(config.DTYPE)));
         }
     }
 }
