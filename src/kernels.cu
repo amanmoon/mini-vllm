@@ -717,4 +717,94 @@ namespace MiniVLLM
 
     template __global__ void silu<__nv_bfloat16>(int projectionDim, __nv_bfloat16 *gateProjection, __nv_bfloat16 *upProjection);
     template __global__ void silu<float>(int projectionDim, float *gateProjection, float *upProjection);
+
+    template <typename T>
+    void getUpAndDownProjection(int embeddingLength, int hiddenDim,
+                                const float &gateAlpha, const float &gateBeta, const float &upAlpha, const float &upBeta,
+                                cublasHandle_t cublasHandle,
+                                T *rmsNorms, T *gateProjectionWeights, T *upProjectionWeights, T *gateProjection, T *upProjection)
+    {
+        // Gate projection
+        cublasGemmEx(cublasHandle,
+                     CUBLAS_OP_T,
+                     CUBLAS_OP_N,
+                     hiddenDim,
+                     1,
+                     embeddingLength,
+                     &gateAlpha,
+                     gateProjectionWeights,
+                     CUDA_R_16BF,
+                     embeddingLength,
+                     rmsNorms,
+                     CUDA_R_16BF,
+                     embeddingLength,
+                     &gateBeta,
+                     gateProjection,
+                     CUDA_R_16BF,
+                     hiddenDim,
+                     CUBLAS_COMPUTE_32F,
+                     CUBLAS_GEMM_DEFAULT);
+
+        // Up projection
+        cublasGemmEx(cublasHandle,
+                     CUBLAS_OP_T,
+                     CUBLAS_OP_N,
+                     hiddenDim,
+                     1,
+                     embeddingLength,
+                     &upAlpha,
+                     upProjectionWeights,
+                     CUDA_R_16BF,
+                     embeddingLength,
+                     rmsNorms,
+                     CUDA_R_16BF,
+                     embeddingLength,
+                     &upBeta,
+                     upProjection,
+                     CUDA_R_16BF,
+                     hiddenDim,
+                     CUBLAS_COMPUTE_32F,
+                     CUBLAS_GEMM_DEFAULT);
+    }
+
+    template void getUpAndDownProjection<__nv_bfloat16>(int embeddingLength, int hiddenDim, const float &gateAlpha, const float &gateBeta, const float &upAlpha, const float &upBeta,
+                                                        cublasHandle_t cublasHandle, __nv_bfloat16 *rmsNorms, __nv_bfloat16 *gateProjectionWeights, __nv_bfloat16 *upProjectionWeights, __nv_bfloat16 *gateProjection, __nv_bfloat16 *upProjection);
+
+    template void getUpAndDownProjection<float>(int embeddingLength, int hiddenDim, const float &gateAlpha, const float &gateBeta, const float &upAlpha, const float &upBeta,
+                                                cublasHandle_t cublasHandle, float *rmsNorms, float *gateProjectionWeights, float *upProjectionWeights, float *gateProjection, float *upProjection);
+
+    template <typename T>
+    void computeDownProjection(int embeddingLength, int hiddenDim,
+                               const float &alpha, const float &beta,
+                               cublasHandle_t cublasHandle,
+                               T *gateProjection, T *downProjectionWeights, T *output)
+    {
+        cublasGemmEx(cublasHandle,
+                     CUBLAS_OP_T,
+                     CUBLAS_OP_N,
+                     embeddingLength,
+                     1,
+                     hiddenDim,
+                     &alpha,
+                     downProjectionWeights,
+                     CUDA_R_16BF,
+                     hiddenDim,
+                     gateProjection,
+                     CUDA_R_16BF,
+                     hiddenDim,
+                     &beta,
+                     output,
+                     CUDA_R_16BF,
+                     embeddingLength,
+                     CUBLAS_COMPUTE_32F,
+                     CUBLAS_GEMM_DEFAULT);
+    }
+
+    template void computeDownProjection<__nv_bfloat16>(int embeddingLength, int hiddenDim, const float &alpha, const float &beta,
+                                                       cublasHandle_t cublasHandle,
+                                                       __nv_bfloat16 *gateProjection, __nv_bfloat16 *downProjectionWeights, __nv_bfloat16 *output);
+
+    template void computeDownProjection<float>(int embeddingLength, int hiddenDim, const float &alpha, const float &beta,
+                                               cublasHandle_t cublasHandle,
+                                               float *gateProjection, float *downProjectionWeights, float *output);
 }

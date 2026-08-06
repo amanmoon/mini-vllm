@@ -62,4 +62,13 @@ namespace MiniVLLM
         void *d_vProjection,
         void *d_oProjectionWeight,
         void *d_output);
+
+    void launchFeedForwardLayer(
+        const ModelConfig &config,
+        cublasHandle_t cublasHandle,
+        void *d_rmsNorms,
+        void *d_gateProjectionWeights,
+        void *d_upProjectionWeights,
+        void *d_downProjectionWeights,
+        void *d_output);
 }

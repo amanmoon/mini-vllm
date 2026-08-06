@@ -355,4 +355,122 @@ namespace MiniVLLM
                 std::to_string(static_cast<int>(config.DTYPE)));
         }
     }
+
+    template <typename T>
+    void feedForwardLayer(cublasHandle_t cublasHandle,
+                          int hiddenSize, int intermediateSize,
+                          T *rmsNorms, T *gateProjectionWeights, T *upProjectionWeights, T *downProjectionWeights, T *gateProjection, T *upProjection, T *output)
+    {
+        constexpr float alpha = 1.0f;
+        constexpr float beta = 0.0f;
+
+        getUpAndDownProjection(
+            hiddenSize,
+            intermediateSize,
+            alpha,
+            beta,
+            alpha,
+            beta,
+            cublasHandle,
+            rmsNorms,
+            gateProjectionWeights,
+            upProjectionWeights,
+            gateProjection,
+            upProjection);
+
+        int blocks = (intermediateSize + THREADS_PER_BLOCK - 1) /
+                     THREADS_PER_BLOCK;
+
+        silu<<<blocks, THREADS_PER_BLOCK>>>(
+            intermediateSize,
+            gateProjection,
+            upProjection);
+
+        computeDownProjection(
+            hiddenSize,
+            intermediateSize,
+            alpha,
+            beta,
+            cublasHandle,
+            gateProjection,
+            downProjectionWeights,
+            output);
+    }
+
+    void launchFeedForwardLayer(
+        const ModelConfig &config,
+        cublasHandle_t cublasHandle,
+        void *d_rmsNorms,
+        void *d_gateProjectionWeights,
+        void *d_upProjectionWeights,
+        void *d_downProjectionWeights,
+        void *d_output)
+    {
+        const size_t projectionSize =
+            static_cast<size_t>(config.INTERMEDIATE_SIZE);
+
+        switch (config.DTYPE)
+        {
+        case DType::BFloat16:
+        {
+            __nv_bfloat16 *d_gateProjection;
+            __nv_bfloat16 *d_upProjection;
+
+            cudaMalloc(&d_gateProjection,
+                       projectionSize * sizeof(__nv_bfloat16));
+
+            cudaMalloc(&d_upProjection,
+                       projectionSize * sizeof(__nv_bfloat16));
+
+            feedForwardLayer<__nv_bfloat16>(
+                cublasHandle,
+                config.HIDDEN_SIZE,
+                config.INTERMEDIATE_SIZE,
+                reinterpret_cast<__nv_bfloat16 *>(d_rmsNorms),
+                reinterpret_cast<__nv_bfloat16 *>(d_gateProjectionWeights),
+                reinterpret_cast<__nv_bfloat16 *>(d_upProjectionWeights),
+                reinterpret_cast<__nv_bfloat16 *>(d_downProjectionWeights),
+                d_gateProjection,
+                d_upProjection,
+                reinterpret_cast<__nv_bfloat16 *>(d_output));
+
+            cudaFree(d_gateProjection);
+            cudaFree(d_upProjection);
+            break;
+        }
+
+        case DType::Float32:
+        {
+            float *d_gateProjection;
+            float *d_upProjection;
+
+            cudaMalloc(&d_gateProjection,
+                       projectionSize * sizeof(float));
+
+            cudaMalloc(&d_upProjection,
+                       projectionSize * sizeof(float));
+
+            feedForwardLayer<float>(
+                cublasHandle,
+                config.HIDDEN_SIZE,
+                config.INTERMEDIATE_SIZE,
+                reinterpret_cast<float *>(d_rmsNorms),
+                reinterpret_cast<float *>(d_gateProjectionWeights),
+                reinterpret_cast<float *>(d_upProjectionWeights),
+                reinterpret_cast<float *>(d_downProjectionWeights),
+                d_gateProjection,
+                d_upProjection,
+                reinterpret_cast<float *>(d_output));
+
+            cudaFree(d_gateProjection);
+            cudaFree(d_upProjection);
+            break;
+        }
+
+        default:
+            throw std::runtime_error(
+                "launchFeedForwardLayer: unsupported DType " +
+                std::to_string(static_cast<int>(config.DTYPE)));
+        }
+    }
 }

@@ -39,4 +39,16 @@ namespace MiniVLLM
 
     template <typename T>
     __global__ void silu(int projectionDim, T *gateProjection, T *upProjection);
+
+    template <typename T>
+    void getUpAndDownProjection(int embeddingLength, int hiddenDim,
+                                const float &gateAlpha, const float &gateBeta, const float &upAlpha, const float &upBeta,
+                                cublasHandle_t cublasHandle,
+                                T *rmsNorms, T *gateProjectionWeights, T *upProjectionWeights, T *gateProjection, T *upProjection);
+
+    template <typename T>
+    void computeDownProjection(int embeddingLength, int hiddenDim,
+                               const float &alpha, const float &beta,
+                               cublasHandle_t cublasHandle,
+                               T *gateProjection, T *downProjectionWeights, T *output);
 }
