@@ -20,7 +20,16 @@ add_library(transformer_lib
     src/load_weights.cpp
     src/dtype.cpp
     src/utils.cpp
-    src/kernels.cu
+    src/kernels/activation.cu
+    src/kernels/attention.cu
+    src/kernels/embedding.cu
+    src/kernels/mlp.cu
+    src/kernels/residual.cu
+    src/kernels/rms_norm.cu
+    src/kernels/rope.cu
+    src/kernels/sampling.cu
+    src/kernels/softmax.cu
+    src/kernels/utils.cu
     model_config/llama.cu
 )
 
@@ -29,8 +38,8 @@ set_target_properties(transformer_lib PROPERTIES
 )
 
 target_include_directories(transformer_lib PUBLIC
-    include
-    model_config
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/model_config
 )
 
 target_link_libraries(transformer_lib PUBLIC
