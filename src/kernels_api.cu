@@ -167,6 +167,7 @@ namespace MiniVLLM
 
     void launchGEMM(
         const ModelConfig &config,
+        cublasHandle_t cublas_handle,
         int m, int n, int k,
         void *d_output, const void *d_a, const void *d_b,
         bool transposeA, bool transposeB,
@@ -188,20 +189,8 @@ namespace MiniVLLM
         const int lda = transposeA ? m : k;
         const int ldb = transposeB ? k : n;
 
-        static cublasHandle_t handle = nullptr;
-        if (handle == nullptr)
-        {
-            const cublasStatus_t createStatus = cublasCreate(&handle);
-            if (createStatus != CUBLAS_STATUS_SUCCESS)
-            {
-                throw std::runtime_error(
-                    "cublasCreate failed with cuBLAS status " +
-                    std::to_string(static_cast<int>(createStatus)));
-            }
-        }
-
         const cublasStatus_t gemmStatus = cublasGemmEx(
-            handle, opB, opA,
+            cublas_handle, opB, opA,
             n, m, k,
             &alpha, d_b, dataType, ldb,
             d_a, dataType, lda, &beta,

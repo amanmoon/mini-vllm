@@ -36,4 +36,7 @@ namespace MiniVLLM
     template <typename T>
     void computeOutputProjection(int hiddenSize, int numTokens, const float &alpha, const float &beta,
                                  cublasHandle_t cublasHandle, T *attentionOutput, T *oProjectionWeights, T *output);
+
+    template <typename T>
+    __global__ void silu(int projectionDim, T *gateProjection, T *upProjection);
 }

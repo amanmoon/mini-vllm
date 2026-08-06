@@ -41,6 +41,7 @@ namespace MiniVLLM
 
     void launchGEMM(
         const ModelConfig &config,
+        cublasHandle_t cublas_handle,
         int m,
         int n,
         int k,
