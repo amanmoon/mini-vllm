@@ -440,6 +440,51 @@ namespace MiniVLLM
     template __global__ void causalMask<__nv_bfloat16>(int numTokens, __nv_bfloat16 *attentionScore);
     template __global__ void causalMask<float>(int numTokens, float *attentionScore);
 
+    /**
+     * @brief Computes the row-wise softmax of the attention score matrix.
+     *
+     * This kernel assumes the attention scores are stored as:
+     *
+     *      [attentionHead][queryToken][keyToken]
+     *
+     * where each attention head contains a square matrix of size
+     * numTokens × numTokens.
+     *
+     * Grid Mapping:
+     *      grid.x = attentionHeads
+     *      grid.y = numTokens (one block per query token)
+     *
+     * Block Mapping:
+     *      block.x = THREADS_PER_BLOCK
+     *
+     * Each CUDA block computes the softmax for a single row of one
+     * attention head. The computation is performed in three stages:
+     *
+     *  1. Compute the maximum element in the row.
+     *     - Each thread scans a subset of columns.
+     *     - A parallel reduction finds the row maximum.
+     *     - Subtracting this maximum before exponentiation improves
+     *       numerical stability.
+     *
+     *  2. Compute exponentials and their sum.
+     *     - Each thread computes exp(score - rowMax) for its assigned
+     *       columns.
+     *     - The exponentials are written back in-place.
+     *     - A parallel reduction computes the sum of all exponentials.
+     *
+     *  3. Normalize.
+     *     - Each stored exponential is divided by the row sum,
+     *       producing the final softmax probabilities.
+     *
+     * Shared memory is reused for both reduction operations.
+     *
+     * @tparam T Storage type of attention scores
+     *           (e.g. float, half, __nv_bfloat16).
+     *
+     * @param numTokens      Number of tokens in the sequence.
+     * @param attentionScore Pointer to the attention score tensor of shape:
+     *                       [attentionHeads][numTokens][numTokens].
+     */
     template <typename T>
     __global__ void softmax(int numTokens, T *attentionScore)
     {
@@ -505,6 +550,64 @@ namespace MiniVLLM
     template __global__ void softmax<__nv_bfloat16>(int numTokens, __nv_bfloat16 *attentionScore);
     template __global__ void softmax<float>(int numTokens, float *attentionScore);
 
+    /**
+     * @brief Computes the attention output for every attention head.
+     *
+     * This function performs the matrix multiplication:
+     *
+     *      AttentionOutput = Value × Softmax(AttentionScores)
+     *
+     * for each attention head independently.
+     *
+     * The attention scores are assumed to have already been scaled and
+     * normalized using the softmax operation.
+     *
+     * Grouped Query Attention (GQA):
+     * ------------------------------
+     * When the number of query heads is larger than the number of
+     * key/value heads, multiple query heads share the same key/value head.
+     *
+     *      gqaRatio = attentionHeads / keyValueHeads
+     *
+     * Query heads:
+     *      [0 ... gqaRatio-1]       -> KV head 0
+     *      [gqaRatio ... 2*gqaRatio-1] -> KV head 1
+     *      ...
+     *
+     * For each attention head:
+     *   1. Determine the corresponding key/value head.
+     *   2. Multiply the value matrix with the attention probability matrix.
+     *   3. Store the resulting context vectors in the output tensor.
+     *
+     * Matrix dimensions:
+     *
+     *      Value Matrix            : (headDim × numTokens)
+     *      Attention Probabilities : (numTokens × numTokens)
+     *      Output                  : (headDim × numTokens)
+     *
+     * cuBLAS computes:
+     *
+     *      Output = Value × AttentionScores
+     *
+     * using FP32 accumulation while storing the final result in type T.
+     *
+     * @tparam T Data type of tensors
+     *           (e.g. __nv_bfloat16).
+     *
+     * @param attentionHeads Number of query attention heads.
+     * @param keyValueHeads  Number of key/value heads.
+     * @param headDim        Dimension of each attention head.
+     * @param numTokens      Number of tokens in the sequence.
+     * @param attentionAlpha GEMM scaling factor (typically 1.0f).
+     * @param attentionBeta  GEMM output scaling factor (typically 0.0f).
+     * @param cublas_handle  Initialized cuBLAS handle.
+     * @param attentionScore Pointer to softmax attention probabilities of shape:
+     *                       [attentionHeads][numTokens][numTokens].
+     * @param valueProjection Pointer to value projections of shape:
+     *                        [keyValueHeads][headDim][numTokens].
+     * @param attentionOutput Pointer to output tensor of shape:
+     *                        [attentionHeads][headDim][numTokens].
+     */
     template <typename T>
     void computeAttentionOutput(int attentionHeads, int keyValueHeads, int headDim, int numTokens, const float &attentionAlpha, const float &attentionBeta,
                                 cublasHandle_t cublas_handle, T *attentionScore, T *valueProjection, T *attentionOutput)
