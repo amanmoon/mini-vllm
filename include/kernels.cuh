@@ -32,4 +32,8 @@ namespace MiniVLLM
     template <typename T>
     void computeAttentionOutput(int attentionHeads, int keyValueHeads, int headDim, int numTokens, const float &attentionAlpha, const float &attentionBeta,
                                 cublasHandle_t cublas_handle, T *attentionScore, T *valueProjection, T *attentionOutput);
+
+    template <typename T>
+    void computeOutputProjection(int hiddenSize, int numTokens, const float &alpha, const float &beta,
+                                 cublasHandle_t cublasHandle, T *attentionOutput, T *oProjectionWeights, T *output);
 }

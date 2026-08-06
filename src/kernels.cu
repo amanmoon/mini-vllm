@@ -647,4 +647,34 @@ namespace MiniVLLM
                                                         cublasHandle_t cublas_handle, __nv_bfloat16 *attentionScore, __nv_bfloat16 *valueProjection, __nv_bfloat16 *attentionOutput);
     template void computeAttentionOutput<float>(int attentionHeads, int keyValueHeads, int headDim, int numTokens, const float &attentionAlpha, const float &attentionBeta,
                                                 cublasHandle_t cublas_handle, float *attentionScore, float *valueProjection, float *attentionOutput);
+
+    template <typename T>
+    void computeOutputProjection(int hiddenSize, int numTokens, const float &alpha, const float &beta,
+                                 cublasHandle_t cublasHandle, T *attentionOutput, T *oProjectionWeights, T *output)
+    {
+        cublasGemmEx(cublasHandle,
+                     CUBLAS_OP_N,
+                     CUBLAS_OP_N,
+                     hiddenSize,
+                     numTokens,
+                     hiddenSize,
+                     &alpha,
+                     oProjectionWeights,
+                     CUDA_R_16BF,
+                     hiddenSize,
+                     attentionOutput,
+                     CUDA_R_16BF,
+                     hiddenSize,
+                     &beta,
+                     output,
+                     CUDA_R_16BF,
+                     hiddenSize,
+                     CUBLAS_COMPUTE_32F,
+                     CUBLAS_GEMM_DEFAULT);
+    }
+
+    template void computeOutputProjection<__nv_bfloat16>(int hiddenSize, int numTokens, const float &alpha, const float &beta,
+                                                         cublasHandle_t cublasHandle, __nv_bfloat16 *attentionOutput, __nv_bfloat16 *oProjectionWeights, __nv_bfloat16 *output);
+    template void computeOutputProjection<float>(int hiddenSize, int numTokens, const float &alpha, const float &beta,
+                                                 cublasHandle_t cublasHandle, float *attentionOutput, float *oProjectionWeights, float *output);
 }

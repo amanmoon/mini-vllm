@@ -59,5 +59,6 @@ namespace MiniVLLM
         void *d_qProjection,
         void *d_kProjection,
         void *d_vProjection,
-        void *d_oProjection);
+        void *d_oProjectionWeight,
+        void *d_output);
 }

@@ -226,40 +226,58 @@ namespace MiniVLLM
                    T *queryProjection,
                    T *keyProjection,
                    T *valueProjection,
+                   T *oProjectionWeight,
                    T *attentionScore,
-                   T *attentionOutput)
+                   T *attentionOutput,
+                   T *output)
     {
         float keyQueryAlpha = 1.0f / sqrt(headDim);
-        constexpr float attentionValueAlpha = 1.0f;
+        constexpr float alpha = 1.0f;
         constexpr float beta = 0.0f;
 
-        getGroupedQueryAttentionScores<T>(attentionHeads,
-                                          keyValueHeads,
-                                          headDim,
-                                          numTokens,
-                                          keyQueryAlpha,
-                                          beta,
-                                          cublas_handle,
-                                          queryProjection,
-                                          keyProjection,
-                                          attentionScore);
+        getGroupedQueryAttentionScores<T>(
+            attentionHeads,
+            keyValueHeads,
+            headDim,
+            numTokens,
+            keyQueryAlpha,
+            beta,
+            cublas_handle,
+            queryProjection,
+            keyProjection,
+            attentionScore);
 
-        causalMask<<<attentionHeads, THREADS_PER_BLOCK>>>(numTokens, attentionScore);
+        causalMask<<<attentionHeads, THREADS_PER_BLOCK>>>(
+            numTokens,
+            attentionScore);
 
         dim3 softmaxGrid(attentionHeads, numTokens);
 
-        softmax<T><<<softmaxGrid, THREADS_PER_BLOCK>>>(numTokens, attentionScore);
+        softmax<T><<<softmaxGrid, THREADS_PER_BLOCK>>>(
+            numTokens,
+            attentionScore);
 
-        computeAttentionOutput<T>(attentionHeads,
-                                  keyValueHeads,
-                                  headDim,
-                                  numTokens,
-                                  attentionValueAlpha,
-                                  beta,
-                                  cublas_handle,
-                                  attentionScore,
-                                  valueProjection,
-                                  attentionOutput);
+        computeAttentionOutput<T>(
+            attentionHeads,
+            keyValueHeads,
+            headDim,
+            numTokens,
+            alpha,
+            beta,
+            cublas_handle,
+            attentionScore,
+            valueProjection,
+            attentionOutput);
+
+        computeOutputProjection<T>(
+            attentionHeads * headDim,
+            numTokens,
+            alpha,
+            beta,
+            cublas_handle,
+            attentionOutput,
+            oProjectionWeight,
+            output);
     }
 
     void launchGroupQueryAttention(
@@ -269,17 +287,29 @@ namespace MiniVLLM
         void *d_qProjection,
         void *d_kProjection,
         void *d_vProjection,
-        void *d_oProjection)
+        void *d_oProjectionWeight,
+        void *d_output)
     {
-        size_t attentionScoreSize = static_cast<size_t>(config.NUM_ATTENTION_HEADS) * numTokens * numTokens;
+        const size_t attentionScoreSize =
+            static_cast<size_t>(config.NUM_ATTENTION_HEADS) *
+            numTokens * numTokens;
+
+        const size_t attentionContextSize =
+            static_cast<size_t>(config.HIDDEN_SIZE) *
+            numTokens;
 
         switch (config.DTYPE)
         {
         case DType::BFloat16:
         {
             __nv_bfloat16 *d_attentionScore;
+            __nv_bfloat16 *d_attentionContext;
+
             cudaMalloc(&d_attentionScore,
                        attentionScoreSize * sizeof(__nv_bfloat16));
+
+            cudaMalloc(&d_attentionContext,
+                       attentionContextSize * sizeof(__nv_bfloat16));
 
             attention<__nv_bfloat16>(
                 cublas_handle,
@@ -290,18 +320,26 @@ namespace MiniVLLM
                 reinterpret_cast<__nv_bfloat16 *>(d_qProjection),
                 reinterpret_cast<__nv_bfloat16 *>(d_kProjection),
                 reinterpret_cast<__nv_bfloat16 *>(d_vProjection),
+                reinterpret_cast<__nv_bfloat16 *>(d_oProjectionWeight),
                 d_attentionScore,
-                reinterpret_cast<__nv_bfloat16 *>(d_oProjection));
+                d_attentionContext,
+                reinterpret_cast<__nv_bfloat16 *>(d_output));
 
             cudaFree(d_attentionScore);
+            cudaFree(d_attentionContext);
             break;
         }
 
         case DType::Float32:
         {
             float *d_attentionScore;
+            float *d_attentionContext;
+
             cudaMalloc(&d_attentionScore,
                        attentionScoreSize * sizeof(float));
+
+            cudaMalloc(&d_attentionContext,
+                       attentionContextSize * sizeof(float));
 
             attention<float>(
                 cublas_handle,
@@ -312,10 +350,13 @@ namespace MiniVLLM
                 reinterpret_cast<float *>(d_qProjection),
                 reinterpret_cast<float *>(d_kProjection),
                 reinterpret_cast<float *>(d_vProjection),
+                reinterpret_cast<float *>(d_oProjectionWeight),
                 d_attentionScore,
-                reinterpret_cast<float *>(d_oProjection));
+                d_attentionContext,
+                reinterpret_cast<float *>(d_output));
 
             cudaFree(d_attentionScore);
+            cudaFree(d_attentionContext);
             break;
         }
 
