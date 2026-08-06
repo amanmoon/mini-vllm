@@ -1,4 +1,4 @@
-#include "kernels.cuh"
+#include "kernels.hpp"
 #include "llama.hpp"
 #include "dtype.hpp"
 #include "config.hpp"
@@ -43,12 +43,11 @@ namespace MiniVLLM
     template __global__ void embeddingGather<__nv_bfloat16>(int hiddenSize, const int *inputTokenArray, __nv_bfloat16 *outputEmbeddedArray, const __nv_bfloat16 *embeddingMatrix);
     template __global__ void embeddingGather<float>(int hiddenSize, const int *inputTokenArray, float *outputEmbeddedArray, const float *embeddingMatrix);
 
-    void launchEmbeddingGather(
-        const ModelConfig &config,
-        int numTokens,
-        int *d_inputTokenIDs,
-        void *d_embeddedTokens,
-        void *d_embeddingMatrix)
+
+    // host launching function
+    void launchEmbeddingGather(const ModelConfig &config,
+                               int numTokens, int *d_inputTokenIDs,
+                               void *d_embeddedTokens, void *d_embeddingMatrix)
     {
         dim3 grid(numTokens);
         dim3 block(THREADS_PER_BLOCK);

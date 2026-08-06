@@ -2,6 +2,19 @@
 #include "dtype.hpp"
 #include "config.hpp"
 
+//layers
+
+// model.layers.<layer_no>.input_layernorm.weight
+// model.layers.<layer_no>.mlp.down_proj.weight
+// model.layers.<layer_no>.mlp.gate_proj.weight
+// model.layers.<layer_no>.mlp.up_proj.weight
+// model.layers.<layer_no>.post_attention_layernorm.weight
+// model.layers.<layer_no>.self_attn.k_proj.weight
+// model.layers.<layer_no>.self_attn.o_proj.weight
+// model.layers.<layer_no>.self_attn.q_proj.weight
+// model.layers.<layer_no>.self_attn.v_proj.weight
+
+
 namespace MiniVLLM::Llama
 {
 

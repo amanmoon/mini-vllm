@@ -16,7 +16,6 @@ find_package(CUDAToolkit REQUIRED)
 # -----------------------------------------------------------------------------
 
 add_library(transformer_lib
-    src/kernels_api.cu
     src/load_weights.cpp
     src/dtype.cpp
     src/utils.cpp
@@ -30,7 +29,7 @@ add_library(transformer_lib
     src/kernels/sampling.cu
     src/kernels/softmax.cu
     src/kernels/utils.cu
-    model_config/llama.cu
+    model_config/llama.cpp
 )
 
 set_target_properties(transformer_lib PROPERTIES
@@ -40,6 +39,7 @@ set_target_properties(transformer_lib PROPERTIES
 target_include_directories(transformer_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/model_config
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels
 )
 
 target_link_libraries(transformer_lib PUBLIC

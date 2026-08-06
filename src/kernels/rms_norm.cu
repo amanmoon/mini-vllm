@@ -1,5 +1,5 @@
 #include "config.hpp"
-#include "kernels.cuh"
+#include "kernels.hpp"
 
 #include <cuda_bf16.h>
 
@@ -30,34 +30,46 @@ namespace MiniVLLM
      */
 
     template <typename T, typename AccT>
-    __device__ AccT rootMeanSquare(int vectorDim, T *inputVector, AccT epsilon)
+    __device__ AccT rootMeanSquare(int vectorDim, const T *inputVector, AccT epsilon)
     {
-        __shared__ AccT sharedSum[THREADS_PER_BLOCK];
+        // allocating more memory than needed, can change to compile time array size.
+        __shared__ AccT sharedSum[(THREADS_PER_BLOCK + WARP_SIZE - 1) / WARP_SIZE];
 
-        sharedSum[threadIdx.x] = 0.0f;
-        int stride = (vectorDim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-        for (int i = 0; i < stride; i++)
+        AccT localSum = AccT(0);
+        const T *in = inputVector + blockIdx.x * vectorDim;
+        for (int idx = threadIdx.x; idx < vectorDim; idx += blockDim.x)
         {
-            int internalBlockDim = threadIdx.x + i * THREADS_PER_BLOCK;
-            if (internalBlockDim < vectorDim)
-            {
-                int workIdx = blockIdx.x * vectorDim + internalBlockDim;
-                sharedSum[threadIdx.x] += static_cast<AccT>(inputVector[workIdx]) * static_cast<AccT>(inputVector[workIdx]);
-            }
+            AccT x = static_cast<AccT>(in[idx]);
+            localSum += x * x;
         }
-        __syncthreads();
-        for (int stride = THREADS_PER_BLOCK / 2; stride > 0; stride >>= 1)
-        {
-            if (threadIdx.x < stride)
-                sharedSum[threadIdx.x] += sharedSum[threadIdx.x + stride];
 
-            __syncthreads();
+        int lane = threadIdx.x % WARP_SIZE;
+        int warp = threadIdx.x / WARP_SIZE;
+        unsigned warpMask = __activemask();
+        for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+            localSum += __shfl_down_sync(warpMask, localSum, offset);
+
+        if (lane == 0)
+            sharedSum[warp] = localSum;
+        __syncthreads();
+
+        AccT local = AccT(0);
+
+        int numWarps = (blockDim.x + WARP_SIZE - 1) / WARP_SIZE;
+
+        unsigned reduceMask = __ballot_sync(0xffffffff, threadIdx.x < numWarps);
+
+        if (threadIdx.x < numWarps)
+        {
+            local = sharedSum[threadIdx.x];
+
+            for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+                local += __shfl_down_sync(reduceMask, local, offset);
         }
         if (threadIdx.x == 0)
-            sharedSum[0] = sqrt((sharedSum[0] / static_cast<AccT>(vectorDim)) + epsilon);
+            sharedSum[0] = sqrtf(local / vectorDim + epsilon);
 
         __syncthreads();
-
         return sharedSum[0];
     }
 
@@ -90,27 +102,54 @@ namespace MiniVLLM
      *   numerical stability.
      */
     template <typename T, typename AccT>
-    __global__ void rootMeanSquareNorm(int vectorDim, AccT epsilon, T *outputVector, T *inputVector, T *normWeights)
+    __global__ void rootMeanSquareNorm(int vectorDim, AccT epsilon, T *outputVector, const T *inputVector, const T *normWeights)
     {
         AccT rmsValue = rootMeanSquare<T, AccT>(vectorDim, inputVector, epsilon);
 
-        int stride = (vectorDim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-        for (int i = 0; i < stride; ++i)
+        AccT invRMSValue = AccT(1) / rmsValue;
+        const T *in = inputVector + blockIdx.x * vectorDim;
+        T *out = outputVector + blockIdx.x * vectorDim;
+        for (int idx = threadIdx.x; idx < vectorDim; idx += blockDim.x)
         {
-            int internalBlockDim = i * THREADS_PER_BLOCK + threadIdx.x;
-            if (internalBlockDim < vectorDim)
-            {
-                int workerIdx = blockIdx.x * vectorDim + internalBlockDim;
-                AccT out =
-                    static_cast<AccT>(inputVector[workerIdx]) /
-                    rmsValue *
-                    static_cast<AccT>(normWeights[internalBlockDim]);
-
-                outputVector[workerIdx] = static_cast<T>(out);
-            }
+            AccT normVal = static_cast<AccT>(in[idx]) * invRMSValue * static_cast<AccT>(normWeights[idx]);
+            out[idx] = static_cast<T>(normVal);
         }
     }
 
-    template __global__ void rootMeanSquareNorm<__nv_bfloat16, float>(int vectorDim, float epsilon, __nv_bfloat16 *outputVector, __nv_bfloat16 *inputVector, __nv_bfloat16 *normWeights);
-    template __global__ void rootMeanSquareNorm<float, double>(int vectorDim, double epsilon, float *outputVector, float *inputVector, float *normWeights);
+    template __global__ void rootMeanSquareNorm<__nv_bfloat16, float>(int vectorDim, float epsilon, __nv_bfloat16 *outputVector, const __nv_bfloat16 *inputVector, const __nv_bfloat16 *normWeights);
+    template __global__ void rootMeanSquareNorm<float, float>(int vectorDim, float epsilon, float *outputVector, const float *inputVector, const float *normWeights);
+
+    // host, launching function
+    void launchRMSNorm(const ModelConfig &config,
+                       int numTokens,
+                       void *d_output, void *d_input, void *d_normWeights)
+    {
+        dim3 grid(numTokens);
+        dim3 block(THREADS_PER_BLOCK);
+
+        switch (config.DTYPE)
+        {
+        case DType::BFloat16:
+            rootMeanSquareNorm<__nv_bfloat16, float><<<grid, block>>>(
+                config.HIDDEN_SIZE,
+                config.RMS_NORM_EPS, reinterpret_cast<__nv_bfloat16 *>(d_output),
+                reinterpret_cast<__nv_bfloat16 *>(d_input),
+                reinterpret_cast<__nv_bfloat16 *>(d_normWeights));
+            break;
+
+        case DType::Float32:
+            rootMeanSquareNorm<float, double><<<grid, block>>>(
+                config.HIDDEN_SIZE,
+                static_cast<double>(config.RMS_NORM_EPS),
+                reinterpret_cast<float *>(d_output),
+                reinterpret_cast<float *>(d_input),
+                reinterpret_cast<float *>(d_normWeights));
+            break;
+
+        default:
+            throw std::runtime_error(
+                "launchRMSNorm: unsupported DType " +
+                std::to_string(static_cast<int>(config.DTYPE)));
+        }
+    }
 }

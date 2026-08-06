@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "dtype.hpp"
-#include "kernels_api.hpp"
+#include "kernels.hpp"
 
 namespace
 {
